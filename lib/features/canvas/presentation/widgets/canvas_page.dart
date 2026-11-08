@@ -182,9 +182,10 @@ class _CanvasPageState extends State<CanvasPage> {
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          const SizedBox(width: 6),
+                                          const SizedBox(width: 12),
                                           ConstrainedBox(
                                             constraints: const BoxConstraints(
+                                              minWidth: 20,
                                               maxWidth: 120,
                                             ),
                                             child: Text(
@@ -205,7 +206,7 @@ class _CanvasPageState extends State<CanvasPage> {
                                         ],
                                       ),
                                     ),
-                                    const SizedBox(width: 6),
+                                    const SizedBox(width: 12),
 
                                     // 關閉標籤 (×)
                                     InkWell(
