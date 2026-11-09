@@ -10,12 +10,12 @@ import 'package:perfect_freehand/perfect_freehand.dart';
 
 import '../../../../core/algorithms/ray_casting.dart';
 import '../../../../core/engine/repaint_signal.dart';
-import '../../../../core/engine/tile_planner.dart';
 import '../../domain/models/brush_settings.dart';
 import '../../domain/models/stroke.dart';
 import '../../domain/commands/canvas_command.dart';
 import '../../domain/models/tools.dart';
 import '../../../document/domain/note_page.dart';
+import 'page_image_manager.dart';
 
 // 2. 主畫布控制器 (CanvasController)
 class CanvasController extends ChangeNotifier {
@@ -24,9 +24,7 @@ class CanvasController extends ChangeNotifier {
   final List<CanvasCommand> _redoStack = [];
   final List<PointVector> _currentPoints = [];
   final List<MapEntry<int, Stroke>> _currentErasedBatch = [];
-  bool _isSharpening = false;
   Offset? _lastEraseScenePoint; // 橡皮擦上一個取樣點 (用來做線段掃掠碰撞)
-  final Set<NotePage> _loadingBase = {}; // 正在載入底圖的頁面 (避免重複載入)
   int _incrementalBakes = 0;
 
   /// 內容有變動時通知外部 (畫布頁用來做防抖自動存檔)
@@ -39,9 +37,15 @@ class CanvasController extends ChangeNotifier {
     currentNotebook.updatedAt = DateTime.now();
     onContentChanged?.call();
   }
-  bool _sharpenPending = false; // 銳化進行中又有新縮放 → 結束後再檢查一次
-  bool _disposed = false;
-  NotePage? _shownPage; // 目前顯示中的頁面 (切頁時釋放前一頁的圖)
+
+  /// PDF 底圖 / 高清圖塊的生命週期交給專責物件管理
+  late final PageImageManager images = PageImageManager(
+    transform: () => transformation,
+    viewportSize: () => viewportSize,
+    zoom: () => zoomPercentage / 100,
+    onChanged: notifyListeners,
+  );
+
   List<NotePage> get pages => currentNotebook.pages;
   int currentPageIndex = 0;
 
@@ -301,13 +305,12 @@ class CanvasController extends ChangeNotifier {
     showZoomIndicator = true;
     _startZoomIndicatorFadeout();
     notifyListeners();
-    unawaited(_checkAndSharpenPdf());
+    images.refreshDetail();
   }
 
   @override
   void dispose() {
-    _disposed = true;
-    if (_shownPage != null) _releasePageImages(_shownPage!);
+    images.dispose();
     _saveCurrentPageState(); // ★ 核心修復：退出畫布時，立即把筆跡存回當前頁面！
     _zoomIndicatorTimer?.cancel();
     activeRepaintNotifier.dispose();
@@ -361,10 +364,8 @@ class CanvasController extends ChangeNotifier {
     currentPageIndex = targetIndex.clamp(0, pages.length - 1);
     final targetPage = pages[currentPageIndex];
 
-    // ★ 離開的頁面釋放圖塊與底圖 (PDF 頁面之後可按需重新渲染)，避免翻頁越翻越吃記憶體
-    final prev = _shownPage;
-    if (prev != null && prev != targetPage) _releasePageImages(prev);
-    _shownPage = targetPage;
+    // 離開的頁面釋放圖塊與底圖，避免翻頁越翻越吃記憶體
+    images.setShown(targetPage);
 
     _historyStrokes.clear();
     _historyStrokes.addAll(targetPage.strokes);
@@ -379,35 +380,9 @@ class CanvasController extends ChangeNotifier {
     _bakeHistoryToPicture();
     notifyListeners();
 
-    // ★ 按需加載底圖 (整頁、低解析度)
-    //   _loadingBase 去重：A→B→A 快速切換時不會同時渲染兩次、舊的那張也不會被蓋掉後漏掉
-    if (targetPage.cachedBackgroundImage == null &&
-        targetPage.pdfFilePath != null &&
-        targetPage.pdfPageNumber != null &&
-        _loadingBase.add(targetPage)) {
-      try {
-        final image = await PdfService.renderPageImage(
-          targetPage.pdfFilePath!,
-          targetPage.pdfPageNumber!,
-          _baseScale(targetPage),
-        );
-        if (image != null) {
-          if (_disposed ||
-              _shownPage != targetPage ||
-              targetPage.cachedBackgroundImage != null) {
-            image.dispose(); // 等待期間已切走 / 已被別處載入，這張沒人要了
-          } else {
-            targetPage.cachedBackgroundImage = image;
-            notifyListeners();
-          }
-        }
-      } finally {
-        _loadingBase.remove(targetPage);
-      }
-    }
-
-    // 若目前視野是放大的，補上可視區域的高清圖塊
-    unawaited(_checkAndSharpenPdf());
+    // 按需載入底圖，完成後若視野是放大的再補上高清圖塊
+    await images.loadBase(targetPage);
+    images.refreshDetail();
   }
 
   // 下一頁
@@ -890,7 +865,7 @@ class CanvasController extends ChangeNotifier {
 
       // ★ 雙指縮放放開時，自動向 pdfrx 索取高清渲染
       if (wasScaling) {
-        _checkAndSharpenPdf();
+        images.refreshDetail();
       }
     }
     notifyListeners();
@@ -1061,133 +1036,6 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ==========================================
-  // ★ 分塊渲染 (Tile Rendering)
-  //   底圖：整頁 × min(DPR, 記憶體上限)，永遠存在
-  //   圖塊：只涵蓋「可視區域 + 30% 緩衝」，解析度 = 縮放 × DPR
-  //   記憶體 ≈ 一張底圖 + 一個圖塊 (≤16MP)，與縮放倍率無關
-  // ==========================================
-  double get _dpr => ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
-
-  /// 底圖倍率：DPR，且整頁不超過記憶體上限
-  double _baseScale(NotePage page) =>
-      TilePlanner.baseScale(pageW: page.width, pageH: page.height, dpr: _dpr);
-
-  /// 螢幕可視範圍對應到頁面座標、並裁在紙張內
-  Rect? _visiblePageRect(NotePage page) {
-    if (viewportSize.isEmpty) return null;
-    final Rect scene = MatrixUtils.inverseTransformRect(
-      transformation,
-      Offset.zero & viewportSize,
-    );
-    final Rect v = scene.intersect(Rect.fromLTWH(0, 0, page.width, page.height));
-    if (v.width <= 0 || v.height <= 0) return null;
-    return v;
-  }
-
-  /// 安全釋放 ui.Image (等下一個 frame 畫完後再釋放，避免畫到已釋放的圖)
-  void _disposeImageLater(ui.Image? image) {
-    if (image == null) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) => image.dispose());
-    WidgetsBinding.instance.scheduleFrame();
-  }
-
-  bool _clearDetail(NotePage page) {
-    if (page.detailImage == null) return false;
-    _disposeImageLater(page.detailImage);
-    page.detailImage = null;
-    page.detailRect = null;
-    page.detailScale = 0;
-    return true;
-  }
-
-  void _releasePageImages(NotePage page) {
-    _clearDetail(page);
-    if (page.pdfFilePath != null) {
-      // 只釋放能從 PDF 重新渲染的底圖
-      _disposeImageLater(page.cachedBackgroundImage);
-      page.cachedBackgroundImage = null;
-    }
-  }
-
   /// 供外部 (排版完成後) 呼叫
-  void refreshDetail() => unawaited(_checkAndSharpenPdf());
-
-  /// 手勢結束 / 換頁 / 重設縮放後呼叫：視需要重繪可視區域的高清圖塊
-  Future<void> _checkAndSharpenPdf() async {
-    if (_disposed) return;
-    if (_isSharpening) {
-      _sharpenPending = true;
-      return;
-    }
-    if (currentPageIndex >= pages.length) return;
-    final page = currentPage;
-    if (page.pdfFilePath == null || page.pdfPageNumber == null) return;
-
-    final visible = _visiblePageRect(page);
-    if (visible == null) return;
-    final plan = TilePlanner.plan(
-      pageW: page.width,
-      pageH: page.height,
-      visLeft: visible.left,
-      visTop: visible.top,
-      visRight: visible.right,
-      visBottom: visible.bottom,
-      zoom: zoomPercentage / 100,
-      dpr: _dpr,
-    );
-
-    // 1) 縮放不高，底圖已足夠清晰 → 釋放圖塊省記憶體
-    if (plan.scale <= _baseScale(page) * 1.15) {
-      if (_clearDetail(page)) notifyListeners();
-      return;
-    }
-
-    // 2) 現有圖塊仍涵蓋可視範圍且解析度夠 → 不用重繪
-    final dr = page.detailRect;
-    if (page.detailImage != null &&
-        dr != null &&
-        TilePlanner.covers(
-          outerL: dr.left,
-          outerT: dr.top,
-          outerR: dr.right,
-          outerB: dr.bottom,
-          innerL: visible.left,
-          innerT: visible.top,
-          innerR: visible.right,
-          innerB: visible.bottom,
-        ) &&
-        plan.scale <= page.detailScale * 1.15) {
-      return;
-    }
-
-    _isSharpening = true;
-    try {
-      final tile = await PdfService.renderRegion(
-        page.pdfFilePath!,
-        page.pdfPageNumber!,
-        plan.scale,
-        Rect.fromLTRB(plan.left, plan.top, plan.right, plan.bottom),
-      );
-      if (tile == null) return;
-      if (_disposed || _shownPage != page) {
-        tile.image.dispose(); // 等待期間已換頁/離開
-        return;
-      }
-      final old = page.detailImage;
-      page.detailImage = tile.image;
-      page.detailRect = tile.rect;
-      page.detailScale = tile.scale;
-      notifyListeners();
-      _disposeImageLater(old);
-    } catch (e, st) {
-      debugPrint('tile render failed: $e\n$st');
-    } finally {
-      _isSharpening = false; // ★ 無論如何都要解鎖
-      if (_sharpenPending && !_disposed) {
-        _sharpenPending = false;
-        unawaited(_checkAndSharpenPdf()); // 渲染期間視野又變了 → 再檢查一次
-      }
-    }
-  }
+  void refreshDetail() => images.refreshDetail();
 }

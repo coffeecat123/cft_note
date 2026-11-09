@@ -147,7 +147,7 @@ class Stroke {
   // JSON
   // ------------------------------------------------------------
   static double _finite(double? v, [double fallback = 0.0]) =>
-      v?.isFinite ?? false ? v! : fallback;
+      (v != null && v.isFinite) ? v : fallback;
 
   Map<String, dynamic> toJson() => {
     // NaN / Infinity 會讓 JSON 編碼失敗或寫出壞檔 → 過濾
