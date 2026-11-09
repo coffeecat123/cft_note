@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../../pdf_import_export/services/image_export_service.dart';
 
-/// 截圖完成後的底部面板：預覽 + 分享 / 存到相簿 / 儲存檔案
+/// 截圖完成後的底部面板：預覽 + 複製 / 分享 / 存到相簿 / 儲存檔案
 class ScreenshotSheet extends StatefulWidget {
   final Uint8List png;
   final String fileName;
@@ -74,6 +74,7 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // ── 1. 補回：圖片預覽區塊 ───────────────────
             ConstrainedBox(
               constraints: BoxConstraints(maxHeight: maxPreviewH),
               child: Container(
@@ -87,55 +88,88 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
               ),
             ),
             const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                Builder(
-                  builder: (btnCtx) => _action(
-                    Icons.ios_share,
-                    '分享',
-                    () => _run(
-                      () async {
-                        await ImageExportService.sharePng(
-                          widget.png,
-                          widget.fileName,
-                          origin: _originOf(btnCtx),
-                        );
-                        return true;
-                      },
+
+            // ── 2. 自動縮排的按鈕列 ─────────────────────
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Row(
+                  children: [
+                    if (ImageExportService.canCopyImage)
+                      Expanded(
+                        child: _action(
+                          Icons.copy_rounded,
+                          '複製',
+                          () => _run(
+                            () => ImageExportService.copyPngToClipboard(
+                              widget.png,
+                            ),
+                            successMessage: '已複製圖片到剪貼簿',
+                            closeOnSuccess: true,
+                          ),
+                        ),
+                      ),
+                    Expanded(
+                      child: Builder(
+                        builder: (btnCtx) => _action(
+                          Icons.ios_share,
+                          '分享',
+                          () => _run(() async {
+                            await ImageExportService.sharePng(
+                              widget.png,
+                              widget.fileName,
+                              origin: _originOf(btnCtx),
+                            );
+                            return true;
+                          }),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                if (ImageExportService.canSaveToGallery)
-                  _action(
-                    Icons.photo_library_outlined,
-                    '存到相簿',
-                    () => _run(
-                      () async {
-                        final ok = await ImageExportService.saveToGallery(
-                          widget.png,
-                          widget.fileName,
-                        );
-                        if (!ok && mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('沒有相簿存取權限，請到系統設定開啟')),
-                          );
-                        }
-                        return ok;
-                      },
-                      successMessage: '已存到相簿',
+                    if (ImageExportService.canSaveToGallery)
+                      Expanded(
+                        child: _action(
+                          Icons.photo_library_outlined,
+                          '存到相簿',
+                          () => _run(
+                            () async {
+                              final ok = await ImageExportService.saveToGallery(
+                                widget.png,
+                                widget.fileName,
+                              );
+                              if (!ok && mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('沒有相簿存取權限，請到系統設定開啟'),
+                                  ),
+                                );
+                              }
+                              return ok;
+                            },
+                            successMessage: '已存到相簿',
+                            closeOnSuccess: true,
+                          ),
+                        ),
+                      ),
+                    Expanded(
+                      child: _action(
+                        Icons.save_alt,
+                        '儲存檔案',
+                        () => _run(
+                          () => ImageExportService.savePng(
+                            widget.png,
+                            widget.fileName,
+                          ),
+                          successMessage: '截圖已儲存',
+                          closeOnSuccess: true,
+                        ),
+                      ),
                     ),
-                  ),
-                _action(
-                  Icons.save_alt,
-                  '儲存檔案',
-                  () => _run(
-                    () => ImageExportService.savePng(widget.png, widget.fileName),
-                    successMessage: '截圖已儲存',
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
+
+            // ── 3. 補回：忙碌處理時的進度條 ─────────────
             if (_busy)
               const Padding(
                 padding: EdgeInsets.only(top: 12),
@@ -152,7 +186,8 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
       borderRadius: BorderRadius.circular(12),
       onTap: _busy ? null : onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        // 將 horizontal 拿掉（或設為最小 2~4），只保留 vertical 內距
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -162,7 +197,12 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
               child: Icon(icon, color: Colors.blueAccent),
             ),
             const SizedBox(height: 6),
-            Text(label, style: const TextStyle(fontSize: 12)),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 12),
+              maxLines: 1, // 避免小螢幕折行
+              overflow: TextOverflow.ellipsis,
+            ),
           ],
         ),
       ),

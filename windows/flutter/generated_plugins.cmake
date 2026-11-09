@@ -4,8 +4,10 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   gal
+  irondash_engine_context
   pdfx
   share_plus
+  super_native_extensions
   url_launcher_windows
 )
 

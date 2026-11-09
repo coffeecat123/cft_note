@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:super_clipboard/super_clipboard.dart';
 
 class ImageExportService {
   ImageExportService._();
@@ -54,16 +55,29 @@ class ImageExportService {
     );
   }
 
+  /// 目前平台是否支援寫入系統剪貼簿
+  static bool get canCopyImage => SystemClipboard.instance != null;
+
+  /// 把 PNG 以「圖片」格式複製到系統剪貼簿；平台不支援回傳 false
+  static Future<bool> copyPngToClipboard(Uint8List bytes) async {
+    final clipboard = SystemClipboard.instance;
+    if (clipboard == null) return false;
+    final item = DataWriterItem();
+    item.add(Formats.png(bytes));
+    await clipboard.write([item]);
+    return true;
+  }
+
   /// 相簿只有手機有 (gal 不支援 Windows / Linux)
   static bool get canSaveToGallery => Platform.isAndroid || Platform.isIOS;
 
-  /// 存到系統相簿 (「筆記截圖」相簿)；沒有權限或被拒絕回傳 false
+  /// 存到系統相簿 (「cft_note」相簿)；沒有權限或被拒絕回傳 false
   static Future<bool> saveToGallery(Uint8List bytes, String fileName) async {
     if (!await Gal.hasAccess()) {
       if (!await Gal.requestAccess()) return false;
     }
     final file = await _writeTemp(bytes, fileName);
-    await Gal.putImage(file.path, album: '筆記截圖');
+    await Gal.putImage(file.path, album: 'cft_note');
     return true;
   }
 

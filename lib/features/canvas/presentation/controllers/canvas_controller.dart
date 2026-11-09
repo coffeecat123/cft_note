@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:cft_note/features/pdf_import_export/services/pdf_service.dart';
 import 'package:cft_note/features/shelf/domain/models/notebook.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:perfect_freehand/perfect_freehand.dart';
 
 import '../../../../core/algorithms/ray_casting.dart';
@@ -363,6 +364,8 @@ class CanvasController extends ChangeNotifier {
 
   // 套索「點一下」判定與浮動選單
   static const double _tapSlop = 10.0; // 螢幕像素；移動超過才算拖曳
+  static const Duration _longPressDelay = Duration(milliseconds: 500);
+  Timer? _lassoLongPressTimer; // 空白處長按 → 顯示「貼上」
   Offset _lassoDownScreen = Offset.zero;
   bool _selectionDragStarted = false;
   LassoMenuKind lassoMenu = LassoMenuKind.none;
@@ -581,6 +584,7 @@ class CanvasController extends ChangeNotifier {
     _saveCurrentPageState(); // ★ 核心修復：退出畫布時，立即把筆跡存回當前頁面！
     _zoomIndicatorTimer?.cancel();
     _scrollSettleTimer?.cancel();
+    _lassoLongPressTimer?.cancel();
     _clearPictureCache();
     activeRepaintNotifier.dispose();
     viewSignal.dispose();
@@ -911,6 +915,7 @@ class CanvasController extends ChangeNotifier {
       _currentPoints.clear();
       _currentLassoDrawing.clear();
       _isPotentialNewLasso = false;
+      _lassoLongPressTimer?.cancel();
       lassoMenu = LassoMenuKind.none; // 縮放 / 平移時選單位置會失準，直接收起
       eraserPosition = null;
       _lastEraseScenePoint = null;
@@ -972,6 +977,7 @@ class CanvasController extends ChangeNotifier {
         } else {
           _isPotentialNewLasso = true;
           _potentialLassoStart = scenePoint;
+          _startLassoLongPress();
         }
       }
     }
@@ -1028,6 +1034,9 @@ class CanvasController extends ChangeNotifier {
           }
           _bakeHistoryToPicture();
         } else if (_isPotentialNewLasso) {
+          // 手指在容許範圍內微動仍算「按住」，才能觸發長按貼上
+          if ((position - _lassoDownScreen).distance < _tapSlop) return;
+          _lassoLongPressTimer?.cancel();
           _isPotentialNewLasso = false;
           clearSelection();
           _currentLassoDrawing.add(_potentialLassoStart);
@@ -1200,15 +1209,9 @@ class CanvasController extends ChangeNotifier {
           _isDraggingSelection = false;
           _selectionDragStarted = false;
         } else if (_isPotentialNewLasso) {
-          // 在範圍外 / 空白處點一下：取消選取。
-          // 本來就沒有選取、且剪貼簿有東西時 → 顯示「貼上」
-          final hadSelection = _selectedLassoPolygon.isNotEmpty;
+          // 在範圍外 / 空白處點一下：取消選取 (「貼上」改由長按觸發)
+          _lassoLongPressTimer?.cancel();
           clearSelection();
-          if (!hadSelection && hasClipboard && isInsidePage(_potentialLassoStart)) {
-            lassoMenu = LassoMenuKind.paste;
-            lassoMenuAnchor = _lassoDownScreen;
-            _pasteScenePoint = _potentialLassoStart;
-          }
         } else if (_currentLassoDrawing.length > 2) {
           _selectedLassoPolygon.clear();
           _selectedLassoPolygon.addAll(_currentLassoDrawing);
@@ -1248,6 +1251,26 @@ class CanvasController extends ChangeNotifier {
   // ==========================================
   // 套索選單動作：複製 / 剪下 / 刪除 / 貼上 / 截圖
   // ==========================================
+  /// 套索工具在空白處按住：剪貼簿有內容時，時間到就浮出「貼上」
+  void _startLassoLongPress() {
+    _lassoLongPressTimer?.cancel();
+    if (!hasClipboard) return;
+    _lassoLongPressTimer = Timer(_longPressDelay, () {
+      if (!_isPotentialNewLasso ||
+          currentTool != DrawingTool.lasso ||
+          _pointerPositions.length != 1 ||
+          !isInsidePage(_potentialLassoStart)) {
+        return;
+      }
+      clearSelection();
+      lassoMenu = LassoMenuKind.paste;
+      lassoMenuAnchor = _lassoDownScreen;
+      _pasteScenePoint = _potentialLassoStart;
+      HapticFeedback.selectionClick();
+      notifyListeners();
+    });
+  }
+
   void hideLassoMenu() {
     if (lassoMenu == LassoMenuKind.none) return;
     lassoMenu = LassoMenuKind.none;
