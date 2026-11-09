@@ -1,0 +1,51 @@
+
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+
+    steps:
+      # 1. 取得原始碼
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. 安裝 Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # 3. 取得 Flutter 套件
+      - name: Install dependencies
+        run: flutter pub get
+
+      # 4. 安裝 iOS 原生依賴
+      - name: Install CocoaPods
+        run: |
+          cd ios
+          pod install
+
+      # 5. 編譯未簽章 iOS App
+      - name: Build iOS
+        run: flutter build ios --release --no-codesign
+
+      # 6. 包裝成 IPA
+      - name: Package IPA
+        run: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -R Runner.app Payload/
+          zip -r app-release.ipa Payload
+
+      # 7. 上傳 IPA
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-ipa
+          path: build/ios/iphoneos/app-release.ipa
+          if-no-files-found: error
