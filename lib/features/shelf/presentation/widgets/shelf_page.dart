@@ -3,6 +3,7 @@ import 'package:cft_note/features/pdf_import_export/services/pdf_export_service.
 import 'package:flutter/material.dart';
 
 import '../../../canvas/presentation/widgets/canvas_page.dart';
+import '../../domain/models/note_folder.dart';
 import '../../domain/models/notebook.dart';
 import '../controllers/shelf_controller.dart';
 import 'create_notebook_dialog.dart';
@@ -23,7 +24,20 @@ class _ShelfPageState extends State<ShelfPage> {
   void initState() {
     super.initState();
     _controller = ShelfController();
-    _controller.addListener(() => setState(() {}));
+    _controller.addListener(() {
+      if (!mounted) return;
+      setState(() {});
+      // 讀取失敗 / 從備份還原 / 儲存失敗 → 明確告知使用者，而不是默默吞掉
+      final warning = _controller.takeLoadWarning();
+      if (warning != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(warning), duration: const Duration(seconds: 10)),
+          );
+        });
+      }
+    });
   }
 
   @override
@@ -41,6 +55,81 @@ class _ShelfPageState extends State<ShelfPage> {
       ),
     );
     _controller.notifyNotebookUpdated();
+  }
+
+  // 刪除資料夾：預設把內容移到上一層；要連同刪除必須再次確認
+  void _showDeleteFolderDialog(NoteFolder folder) {
+    final direct = _controller.folderContents(folder.id);
+    final all = _controller.folderContents(folder.id, recursive: true);
+    final isEmpty = all.notebooks == 0 && all.folders == 0;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('刪除資料夾'),
+        content: Text(
+          isEmpty
+              ? '確定要刪除空資料夾「${folder.name}」嗎？'
+              : '刪除「${folder.name}」後，裡面的 ${direct.notebooks} 本筆記本'
+                    '與 ${direct.folders} 個子資料夾會移到上一層，不會被刪除。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          if (!isEmpty)
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+              onPressed: () {
+                Navigator.pop(ctx);
+                _confirmDeleteFolderWithContents(folder, all);
+              },
+              child: const Text('連同內容刪除…'),
+            ),
+          ElevatedButton(
+            onPressed: () {
+              _controller.deleteFolder(folder.id);
+              Navigator.pop(ctx);
+            },
+            child: Text(isEmpty ? '刪除' : '刪除資料夾'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteFolderWithContents(
+    NoteFolder folder,
+    ({int notebooks, int folders}) all,
+  ) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('連同內容一併刪除？'),
+        content: Text(
+          '將永久刪除「${folder.name}」以及其中的 ${all.notebooks} 本筆記本'
+          '與 ${all.folders} 個子資料夾，無法復原。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              _controller.deleteFolder(folder.id, deleteContents: true);
+              Navigator.pop(ctx);
+            },
+            child: const Text('永久刪除'),
+          ),
+        ],
+      ),
+    );
   }
 
   // 新增資料夾對話框
@@ -204,32 +293,7 @@ class _ShelfPageState extends State<ShelfPage> {
                       ),
                     );
                   },
-                  onDelete: () {
-                    showDialog(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('刪除資料夾'),
-                        content: Text('確定要刪除「${folder.name}」嗎？裡面的所有筆記本將會一併被徹底刪除，無法復原。'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx),
-                            child: const Text('取消'),
-                          ),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.redAccent,
-                              foregroundColor: Colors.white,
-                            ),
-                            onPressed: () {
-                              _controller.deleteFolder(folder.id);
-                              Navigator.pop(ctx);
-                            },
-                            child: const Text('刪除'),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
+                  onDelete: () => _showDeleteFolderDialog(folder),
                 );
               }
 

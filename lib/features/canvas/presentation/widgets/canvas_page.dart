@@ -1,4 +1,5 @@
 // lib/features/canvas/presentation/widgets/canvas_page.dart
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:cft_note/features/document/data/storage_service.dart';
@@ -22,8 +23,44 @@ class CanvasPage extends StatefulWidget {
   State<CanvasPage> createState() => _CanvasPageState();
 }
 
-class _CanvasPageState extends State<CanvasPage> {
+class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
   late final CanvasController _controller;
+
+  // ★ 防抖自動存檔：停筆 2 秒後存；連續書寫最久 20 秒也會強制存一次；
+  //   App 進背景立即存。避免閃退/被系統殺掉時遺失整段筆跡。
+  Timer? _autosaveTimer;
+  DateTime? _firstDirtyAt;
+  static const Duration _autosaveDelay = Duration(seconds: 2);
+  static const Duration _autosaveMaxWait = Duration(seconds: 20);
+
+  void _scheduleAutosave() {
+    final now = DateTime.now();
+    _firstDirtyAt ??= now;
+    _autosaveTimer?.cancel();
+    final waited = now.difference(_firstDirtyAt!);
+    final delay = waited >= _autosaveMaxWait ? Duration.zero : _autosaveDelay;
+    _autosaveTimer = Timer(delay, _flushAutosave);
+  }
+
+  void _flushAutosave() {
+    _autosaveTimer?.cancel();
+    _autosaveTimer = null;
+    _firstDirtyAt = null;
+    _controller.saveCurrentPage();
+    final shelf = widget.shelfController;
+    shelf.activeTabIndex = _controller.activeNotebookIndex;
+    shelf.openTabs
+      ..clear()
+      ..addAll(_controller.openNotebooks);
+    unawaited(shelf.saveToDisk()); // 只存檔、不通知書架重建
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      _flushAutosave();
+    }
+  }
 
   @override
   void initState() {
@@ -34,6 +71,8 @@ class _CanvasPageState extends State<CanvasPage> {
       initialIndex: widget.shelfController.activeTabIndex,
     );
     _controller.addListener(() => setState(() {}));
+    _controller.onContentChanged = _scheduleAutosave;
+    WidgetsBinding.instance.addObserver(this);
     // 第一個 frame 排版完成、知道可視範圍後，若還原的視野是放大狀態就補上高清圖塊
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _controller.refreshDetail();
@@ -42,6 +81,9 @@ class _CanvasPageState extends State<CanvasPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _autosaveTimer?.cancel();
+    _controller.onContentChanged = null;
     _controller.saveCurrentPage();
     // ★ 同步標籤清單與聚焦索引回書架
     widget.shelfController.activeTabIndex = _controller.activeNotebookIndex;
@@ -182,10 +224,9 @@ class _CanvasPageState extends State<CanvasPage> {
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          const SizedBox(width: 12),
+                                          const SizedBox(width: 6),
                                           ConstrainedBox(
                                             constraints: const BoxConstraints(
-                                              minWidth: 20,
                                               maxWidth: 120,
                                             ),
                                             child: Text(
@@ -206,7 +247,7 @@ class _CanvasPageState extends State<CanvasPage> {
                                         ],
                                       ),
                                     ),
-                                    const SizedBox(width: 12),
+                                    const SizedBox(width: 6),
 
                                     // 關閉標籤 (×)
                                     InkWell(
@@ -530,14 +571,18 @@ class _CanvasPageState extends State<CanvasPage> {
                                 size: 16,
                               ),
                               const SizedBox(width: 6),
-                              Text(
-                                _controller.hudMessage ??
-                                    '${_controller.zoomPercentage.toInt()}%',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.5,
+                              // 縮放百分比只重建這個小 Text，不重建整頁
+                              ListenableBuilder(
+                                listenable: _controller.viewSignal,
+                                builder: (context, _) => Text(
+                                  _controller.hudMessage ??
+                                      '${_controller.zoomPercentage.toInt()}%',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 0.5,
+                                  ),
                                 ),
                               ),
                             ],

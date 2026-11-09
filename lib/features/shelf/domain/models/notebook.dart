@@ -26,7 +26,15 @@ class Notebook {
   // ★ 補回此 getter：取得總頁數
   int get pageCount => pages.length;
 
+  static int _idSeq = 0;
+
+  /// 產生唯一 ID (微秒 + 序號，同一毫秒連續建立也不會撞)
+  static String generateId() =>
+      'nb_${DateTime.now().microsecondsSinceEpoch}_${_idSeq++}';
+
+  /// 一般 copyWith：保留 id；pages 若未指定則「深層複製」，不與原本共用。
   Notebook copyWith({
+    String? id,
     String? title,
     Color? coverColor,
     List<NotePage>? pages,
@@ -35,16 +43,21 @@ class Notebook {
     List<double>? transformMatrix,
   }) {
     return Notebook(
-      id: 'nb_${DateTime.now().millisecondsSinceEpoch}',
+      id: id ?? this.id,
       title: title ?? this.title,
       coverColor: coverColor ?? this.coverColor,
       updatedAt: DateTime.now(),
       lastViewedPageIndex: lastViewedPageIndex ?? this.lastViewedPageIndex,
       folderId: folderId ?? this.folderId,
-      transformMatrix: transformMatrix ?? this.transformMatrix,
-      pages: pages ?? this.pages,
+      transformMatrix: transformMatrix ??
+          (this.transformMatrix == null ? null : List.of(this.transformMatrix!)),
+      pages: pages ?? this.pages.map((p) => p.copy()).toList(),
     );
   }
+
+  /// 建立「副本」：新 id、所有頁面與筆劃深層複製，之後兩本互不影響。
+  Notebook duplicate({String? title}) =>
+      copyWith(id: generateId(), title: title ?? '${this.title} (副本)');
 
   Map<String, dynamic> toJson() => {
     'id': id,

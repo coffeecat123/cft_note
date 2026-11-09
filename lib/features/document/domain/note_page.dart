@@ -2,7 +2,7 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:cft_note/features/canvas/domain/models/stroke.dart';
-import 'package:cft_note/features/canvas/presentation/controllers/canvas_controller.dart';
+import 'package:cft_note/features/canvas/domain/commands/canvas_command.dart';
 
 class NotePage {
   final String id;
@@ -40,6 +40,19 @@ class NotePage {
   })  : strokes = strokes ?? [],
         undoStack = undoStack ?? [],
         redoStack = redoStack ?? [];
+
+  /// 深層複製：筆劃完全獨立。
+  /// 不複製 undo/redo (命令物件指向原筆劃)，也不複製 ui.Image
+  /// (影像需各自持有、各自 dispose，之後由 PDF 重新渲染)。
+  NotePage copy() => NotePage(
+    id: id,
+    strokes: strokes.map((s) => s.copy()).toList(),
+    pdfFilePath: pdfFilePath,
+    pdfPageNumber: pdfPageNumber,
+    renderedScale: renderedScale,
+    width: width,
+    height: height,
+  );
 
   Map<String, dynamic> toJson() => {
     'id': id,

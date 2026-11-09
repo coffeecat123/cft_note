@@ -9,102 +9,13 @@ import 'package:flutter/material.dart';
 import 'package:perfect_freehand/perfect_freehand.dart';
 
 import '../../../../core/algorithms/ray_casting.dart';
+import '../../../../core/engine/repaint_signal.dart';
+import '../../../../core/engine/tile_planner.dart';
 import '../../domain/models/brush_settings.dart';
 import '../../domain/models/stroke.dart';
+import '../../domain/commands/canvas_command.dart';
 import '../../domain/models/tools.dart';
 import '../../../document/domain/note_page.dart';
-
-// 1. 命令模式 (Command Pattern) 支援 Undo / Redo
-abstract class CanvasCommand {
-  void undo(List<Stroke> strokes);
-  void redo(List<Stroke> strokes);
-}
-
-// 繪畫命令
-class DrawStrokeCommand implements CanvasCommand {
-  final Stroke stroke;
-  DrawStrokeCommand(this.stroke);
-  @override
-  void undo(List<Stroke> strokes) => strokes.remove(stroke);
-  @override
-  void redo(List<Stroke> strokes) => strokes.add(stroke);
-}
-
-// 橡皮擦命令
-class EraseStrokesCommand implements CanvasCommand {
-  final List<MapEntry<int, Stroke>> erasedItems;
-  EraseStrokesCommand(this.erasedItems);
-  @override
-  void undo(List<Stroke> strokes) {
-    final sorted = List.of(erasedItems)..sort((a, b) => a.key.compareTo(b.key));
-    for (final entry in sorted) {
-      if (entry.key <= strokes.length) {
-        strokes.insert(entry.key, entry.value);
-      } else {
-        strokes.add(entry.value);
-      }
-    }
-  }
-
-  @override
-  void redo(List<Stroke> strokes) {
-    for (final entry in erasedItems) {
-      strokes.remove(entry.value);
-    }
-  }
-}
-
-// 套索移動命令
-class MoveStrokesCommand implements CanvasCommand {
-  final List<Stroke> targetStrokes;
-  final Offset delta;
-  MoveStrokesCommand(this.targetStrokes, this.delta);
-  @override
-  void undo(List<Stroke> strokes) => _applyOffset(-delta);
-  @override
-  void redo(List<Stroke> strokes) => _applyOffset(delta);
-
-  void _applyOffset(Offset offset) {
-    for (final stroke in targetStrokes) {
-      for (int i = 0; i < stroke.points.length; i++) {
-        final p = stroke.points[i];
-        stroke.points[i] = PointVector(
-          p.x + offset.dx,
-          p.y + offset.dy,
-          p.pressure,
-        );
-      }
-    }
-  }
-}
-
-// 套索批次換色命令 (支援 Undo / Redo 復原舊顏色)
-class ChangeStrokesColorCommand implements CanvasCommand {
-  final List<Stroke> oldStrokes;
-  final List<Stroke> newStrokes;
-
-  ChangeStrokesColorCommand(this.oldStrokes, this.newStrokes);
-
-  @override
-  void undo(List<Stroke> strokes) {
-    for (int i = 0; i < newStrokes.length; i++) {
-      final index = strokes.indexOf(newStrokes[i]);
-      if (index != -1) {
-        strokes[index] = oldStrokes[i];
-      }
-    }
-  }
-
-  @override
-  void redo(List<Stroke> strokes) {
-    for (int i = 0; i < oldStrokes.length; i++) {
-      final index = strokes.indexOf(oldStrokes[i]);
-      if (index != -1) {
-        strokes[index] = newStrokes[i];
-      }
-    }
-  }
-}
 
 // 2. 主畫布控制器 (CanvasController)
 class CanvasController extends ChangeNotifier {
@@ -114,6 +25,20 @@ class CanvasController extends ChangeNotifier {
   final List<PointVector> _currentPoints = [];
   final List<MapEntry<int, Stroke>> _currentErasedBatch = [];
   bool _isSharpening = false;
+  Offset? _lastEraseScenePoint; // 橡皮擦上一個取樣點 (用來做線段掃掠碰撞)
+  final Set<NotePage> _loadingBase = {}; // 正在載入底圖的頁面 (避免重複載入)
+  int _incrementalBakes = 0;
+
+  /// 內容有變動時通知外部 (畫布頁用來做防抖自動存檔)
+  VoidCallback? onContentChanged;
+
+  /// 只驅動 Painter / 縮放 HUD 的訊號：雙指縮放時不必重建整個頁面
+  final RepaintSignal viewSignal = RepaintSignal();
+
+  void _markDirty() {
+    currentNotebook.updatedAt = DateTime.now();
+    onContentChanged?.call();
+  }
   bool _sharpenPending = false; // 銳化進行中又有新縮放 → 結束後再檢查一次
   bool _disposed = false;
   NotePage? _shownPage; // 目前顯示中的頁面 (切頁時釋放前一頁的圖)
@@ -237,6 +162,7 @@ class CanvasController extends ChangeNotifier {
     currentNotebook.lastViewedPageIndex = currentPageIndex;
     currentNotebook.transformMatrix = transformation.storage.toList(); // ★ 保存視野
     currentNotebook.updatedAt = DateTime.now();
+    onContentChanged?.call();
 
     // 2. 切換標籤
     activeNotebookIndex = index;
@@ -244,6 +170,9 @@ class CanvasController extends ChangeNotifier {
     if (pages.isEmpty) {
       pages.add(NotePage(id: 'page_1'));
     }
+
+    // 先校正頁碼：resetZoom 會用 currentPage，舊筆記本的頁碼套在新筆記本上可能越界
+    currentPageIndex = currentNotebook.lastViewedPageIndex.clamp(0, pages.length - 1);
 
     // 3. ★ 還原目標筆記本的縮放與平移矩陣
     if (currentNotebook.transformMatrix != null) {
@@ -334,7 +263,7 @@ class CanvasController extends ChangeNotifier {
   Timer? _zoomIndicatorTimer;
 
   double minScale = 0.1; // 最小縮至 10%
-  double maxScale = 20.0; // 最大放大至 2000% (分塊渲染後記憶體與倍率無關)
+  double maxScale = 100.0; // 最大放大至 10000% (分塊渲染後記憶體與倍率無關)
   Size viewportSize = Size.zero;
   // 獲取當前縮放百分比 (例如 1.0x -> 100%, 2.5x -> 250%)
   double get zoomPercentage {
@@ -382,6 +311,9 @@ class CanvasController extends ChangeNotifier {
     _saveCurrentPageState(); // ★ 核心修復：退出畫布時，立即把筆跡存回當前頁面！
     _zoomIndicatorTimer?.cancel();
     activeRepaintNotifier.dispose();
+    viewSignal.dispose();
+    _disposePictureLater(cachedHistoryPicture);
+    cachedHistoryPicture = null;
     super.dispose();
   }
 
@@ -448,21 +380,29 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
 
     // ★ 按需加載底圖 (整頁、低解析度)
+    //   _loadingBase 去重：A→B→A 快速切換時不會同時渲染兩次、舊的那張也不會被蓋掉後漏掉
     if (targetPage.cachedBackgroundImage == null &&
         targetPage.pdfFilePath != null &&
-        targetPage.pdfPageNumber != null) {
-      final image = await PdfService.renderPageImage(
-        targetPage.pdfFilePath!,
-        targetPage.pdfPageNumber!,
-        _baseScale(targetPage),
-      );
-      if (image != null) {
-        if (_disposed || _shownPage != targetPage) {
-          image.dispose(); // 等待期間已切走，這張圖沒人要了
-        } else {
-          targetPage.cachedBackgroundImage = image;
-          notifyListeners();
+        targetPage.pdfPageNumber != null &&
+        _loadingBase.add(targetPage)) {
+      try {
+        final image = await PdfService.renderPageImage(
+          targetPage.pdfFilePath!,
+          targetPage.pdfPageNumber!,
+          _baseScale(targetPage),
+        );
+        if (image != null) {
+          if (_disposed ||
+              _shownPage != targetPage ||
+              targetPage.cachedBackgroundImage != null) {
+            image.dispose(); // 等待期間已切走 / 已被別處載入，這張沒人要了
+          } else {
+            targetPage.cachedBackgroundImage = image;
+            notifyListeners();
+          }
         }
+      } finally {
+        _loadingBase.remove(targetPage);
       }
     }
 
@@ -494,7 +434,7 @@ class CanvasController extends ChangeNotifier {
     );
     // 這裡的 pages.insert 會直接插入 currentNotebook.pages！
     pages.insert(currentPageIndex + 1, newPage);
-    currentNotebook.updatedAt = DateTime.now();
+    _markDirty();
     _loadPageState(currentPageIndex + 1);
   }
 
@@ -517,7 +457,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     pages.insertAll(currentPageIndex + 1, newPages);
-    currentNotebook.updatedAt = DateTime.now();
+    _markDirty();
     _loadPageState(currentPageIndex + 1);
   }
 
@@ -600,6 +540,7 @@ class CanvasController extends ChangeNotifier {
         _recordRecentColor(finalColor); // 此時才加入最近使用
       }
       _colorChangeInitialStrokes = null;
+      _markDirty();
     }
     notifyListeners();
   }
@@ -640,6 +581,7 @@ class CanvasController extends ChangeNotifier {
 
       // ★ 2. 算作真正使用該顏色：加入「最近使用」歷史清單！
       _recordRecentColor(newColor);
+      _markDirty();
 
       _bakeHistoryToPicture();
       notifyListeners();
@@ -661,6 +603,7 @@ class CanvasController extends ChangeNotifier {
       _currentLassoDrawing.clear();
       _isPotentialNewLasso = false;
       eraserPosition = null;
+      _lastEraseScenePoint = null;
 
       // ★ 雙指輕點判定開始：記錄初始狀態、時間與座標
       if (_pointerPositions.length == 2) {
@@ -677,9 +620,8 @@ class CanvasController extends ChangeNotifier {
 
       // 雙指誤擦復原保持不變...
       if (_currentErasedBatch.isNotEmpty) {
-        final sorted = List.of(_currentErasedBatch)
-          ..sort((a, b) => a.key.compareTo(b.key));
-        for (final entry in sorted) {
+        // 依移除順序「反向」插回 (排序索引在多次擦除後會插錯位置)
+        for (final entry in _currentErasedBatch.reversed) {
           if (entry.key <= _historyStrokes.length) {
             _historyStrokes.insert(entry.key, entry.value);
           } else {
@@ -703,7 +645,8 @@ class CanvasController extends ChangeNotifier {
       } else if (currentTool == DrawingTool.eraser) {
         // ★ 記錄位置以繪製感應圓圈
         eraserPosition = scenePoint;
-        _eraseAtPoint(scenePoint);
+        _lastEraseScenePoint = scenePoint;
+        _eraseAlongSegment(scenePoint, scenePoint);
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.lasso) {
@@ -738,9 +681,10 @@ class CanvasController extends ChangeNotifier {
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.eraser) {
-        // ★ 移動時持續更新預覽圓圈位置
+        // ★ 移動時持續更新預覽圓圈位置；以「上一點→這一點」的線段掃掠碰撞
         eraserPosition = scenePoint;
-        _eraseAtPoint(scenePoint);
+        _eraseAlongSegment(_lastEraseScenePoint ?? scenePoint, scenePoint);
+        _lastEraseScenePoint = scenePoint;
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.lasso) {
@@ -774,6 +718,9 @@ class CanvasController extends ChangeNotifier {
         }
       }
     } else if (_pointerPositions.length >= 2) {
+      // HUD 尚未顯示、或正顯示文字訊息時才需要整頁重建；其餘只要重繪畫布
+      final bool needsFullRebuild = !showZoomIndicator || hudMessage != null;
+
       // ★★★ 解決問題 2：進入雙指縮放平移，立即清空文字訊息，強制切換回「縮放 %」顯示！★★★
       hudMessage = null;
 
@@ -846,6 +793,12 @@ class CanvasController extends ChangeNotifier {
 
       _previousDistance = currentDistance;
       _previousMidpoint = currentMidpoint;
+      if (needsFullRebuild) {
+        notifyListeners();
+      } else {
+        viewSignal.fire();
+      }
+      return;
     }
     notifyListeners();
   }
@@ -891,17 +844,20 @@ class CanvasController extends ChangeNotifier {
         _redoStack.clear();
         _currentPoints.clear();
         _recordRecentColor(strokeColor);
-        _bakeHistoryToPicture();
+        _appendToPicture(stroke); // 增量烘焙：不必重畫所有舊筆劃
+        _markDirty();
         activeRepaintNotifier.notifyListeners();
       } else if (currentTool == DrawingTool.eraser) {
         // ★ 核心修復：無論有沒有擦到字，只要手指抬起，感應圈必定清空！
         eraserPosition = null;
+        _lastEraseScenePoint = null;
 
         // 只有真的有擦到字，才打包進 Undo 歷史
         if (_currentErasedBatch.isNotEmpty) {
           _undoStack.add(EraseStrokesCommand(List.from(_currentErasedBatch)));
           _redoStack.clear();
           _currentErasedBatch.clear();
+          _markDirty();
         }
 
         // ★ 必定通知活動層重繪（抹掉感應圓圈）
@@ -913,6 +869,7 @@ class CanvasController extends ChangeNotifier {
               MoveStrokesCommand(List.from(_selectedStrokes), _totalDragDelta),
             );
             _redoStack.clear();
+            _markDirty();
           }
           _isDraggingSelection = false;
         } else if (_isPotentialNewLasso) {
@@ -955,7 +912,11 @@ class CanvasController extends ChangeNotifier {
   void _calculateLassoSelection() {
     _selectedStrokes.clear();
 
+    // 套索外框：和筆劃外框不相交的筆劃不必逐點檢查
+    final polyBounds = _boundsOf(_selectedLassoPolygon);
+
     for (final stroke in _historyStrokes) {
+      if (!stroke.bounds.inflate(1.0).overlaps(polyBounds)) continue;
       bool isHit = false;
       for (final p in stroke.points) {
         if (RayCasting.isPointInPolygon(
@@ -978,21 +939,29 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _eraseAtPoint(Offset point) {
-    // ★ 核心：使用當前縮放下的精準半徑，徹底杜絕「沒碰到就刪掉」的靈異現象
+  Rect _boundsOf(List<Offset> pts) {
+    double minX = pts.first.dx, maxX = minX, minY = pts.first.dy, maxY = minY;
+    for (final p in pts) {
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  /// ★ 橡皮擦：以「上一個取樣點 → 目前點」的掃掠線段 (膠囊體) 對筆劃的每一段做碰撞。
+  /// 舊版只比較取樣點與圓心距離，手移動得快、或筆劃取樣稀疏時會直接穿過去擦不到。
+  void _eraseAlongSegment(Offset from, Offset to) {
     final double radius = currentEraseRadius;
     bool hasChanged = false;
 
     for (int i = _historyStrokes.length - 1; i >= 0; i--) {
       final stroke = _historyStrokes[i];
-      for (final p in stroke.points) {
-        final distance = sqrt(pow(p.x - point.dx, 2) + pow(p.y - point.dy, 2));
-        if (distance <= radius) {
-          _currentErasedBatch.add(MapEntry(i, stroke));
-          _historyStrokes.removeAt(i);
-          hasChanged = true;
-          break;
-        }
+      if (stroke.hitsCapsule(from, to, radius)) {
+        _currentErasedBatch.add(MapEntry(i, stroke));
+        _historyStrokes.removeAt(i);
+        hasChanged = true;
       }
     }
 
@@ -1007,6 +976,7 @@ class CanvasController extends ChangeNotifier {
       final command = _undoStack.removeLast();
       command.undo(_historyStrokes);
       _redoStack.add(command);
+      _markDirty();
       clearSelection();
       _bakeHistoryToPicture();
       notifyListeners();
@@ -1018,45 +988,56 @@ class CanvasController extends ChangeNotifier {
       final command = _redoStack.removeLast();
       command.redo(_historyStrokes);
       _undoStack.add(command);
+      _markDirty();
       clearSelection();
       _bakeHistoryToPicture();
       notifyListeners();
     }
   }
 
-  // 靜態歷史筆畫烘焙
+  // 靜態歷史筆畫烘焙 (全量重畫；筆劃輪廓 Path 已快取，不會重新跑 perfect_freehand)
   void _bakeHistoryToPicture() {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
+    final paint = Paint()..style = PaintingStyle.fill;
 
     for (final stroke in _historyStrokes) {
-      final paint = Paint()
-        ..color = stroke.color
-        ..style = PaintingStyle.fill;
-
-      // 使用每條筆劃當時的專屬筆刷參數進行重繪
-      final outlinePoints = getStroke(
-        stroke.points,
-        options: StrokeOptions(
-          size: stroke.settings.size,
-          thinning: stroke.settings.thinning,
-          smoothing: stroke.settings.smoothing,
-          streamline: stroke.settings.streamline,
-          simulatePressure: false,
-        ),
-      );
-
-      final path = Path();
-      if (outlinePoints.isNotEmpty) {
-        path.moveTo(outlinePoints.first.dx, outlinePoints.first.dy);
-        for (int i = 1; i < outlinePoints.length; i++) {
-          path.lineTo(outlinePoints[i].dx, outlinePoints[i].dy);
-        }
-        path.close();
-        canvas.drawPath(path, paint);
-      }
+      paint.color = stroke.color;
+      canvas.drawPath(stroke.outlinePath, paint);
     }
+
+    final old = cachedHistoryPicture;
     cachedHistoryPicture = recorder.endRecording();
+    _incrementalBakes = 0;
+    _disposePictureLater(old); // ★ 舊 Picture 持有原生記憶體，必須釋放
+  }
+
+  /// 增量烘焙：新增一條筆劃時，只把它疊到現有 Picture 上。
+  /// 疊太多層會讓播放變慢，每 40 次回到全量烘焙一次壓平。
+  void _appendToPicture(Stroke stroke) {
+    final base = cachedHistoryPicture;
+    if (base == null || _incrementalBakes >= 40) {
+      _bakeHistoryToPicture();
+      return;
+    }
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.drawPicture(base);
+    canvas.drawPath(
+      stroke.outlinePath,
+      Paint()
+        ..color = stroke.color
+        ..style = PaintingStyle.fill,
+    );
+    cachedHistoryPicture = recorder.endRecording();
+    _incrementalBakes++;
+    _disposePictureLater(base);
+  }
+
+  void _disposePictureLater(ui.Picture? picture) {
+    if (picture == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => picture.dispose());
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   // ★ 標籤拖曳交換順序
@@ -1086,18 +1067,11 @@ class CanvasController extends ChangeNotifier {
   //   圖塊：只涵蓋「可視區域 + 30% 緩衝」，解析度 = 縮放 × DPR
   //   記憶體 ≈ 一張底圖 + 一個圖塊 (≤16MP)，與縮放倍率無關
   // ==========================================
-  static const double _maxTileSide = 4096.0; // 單邊上限
-  static const double _maxTilePixels = 16e6; // 約 64MB RGBA
-  static const double _tileMargin = 0.3; // 可視範圍外多渲染的比例
-
   double get _dpr => ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
 
   /// 底圖倍率：DPR，且整頁不超過記憶體上限
-  double _baseScale(NotePage page) {
-    final capSide = _maxTileSide / max(page.width, page.height);
-    final capPixels = sqrt(_maxTilePixels / (page.width * page.height));
-    return min(_dpr, min(capSide, capPixels));
-  }
+  double _baseScale(NotePage page) =>
+      TilePlanner.baseScale(pageW: page.width, pageH: page.height, dpr: _dpr);
 
   /// 螢幕可視範圍對應到頁面座標、並裁在紙張內
   Rect? _visiblePageRect(NotePage page) {
@@ -1110,46 +1084,6 @@ class CanvasController extends ChangeNotifier {
     if (v.width <= 0 || v.height <= 0) return null;
     return v;
   }
-
-  bool _tileFits(Rect r, double scale) {
-    final w = r.width * scale, h = r.height * scale;
-    return w <= _maxTileSide && h <= _maxTileSide && w * h <= _maxTilePixels;
-  }
-
-  /// 決定要渲染的區域與倍率 (保證不超過記憶體預算)
-  ({Rect rect, double scale}) _planTile(NotePage page, Rect visible) {
-    double scale = zoomPercentage / 100 * _dpr;
-    final pageRect = Rect.fromLTWH(0, 0, page.width, page.height);
-    final mx = visible.width * _tileMargin, my = visible.height * _tileMargin;
-    final withMargin = Rect.fromLTRB(
-      visible.left - mx,
-      visible.top - my,
-      visible.right + mx,
-      visible.bottom + my,
-    ).intersect(pageRect);
-
-    Rect rect = _tileFits(withMargin, scale) ? withMargin : visible;
-    if (!_tileFits(rect, scale)) {
-      // 可視區域本身就太大 (例如超大平板縮得很小) → 降倍率
-      scale = min(
-        scale,
-        min(
-          _maxTileSide / rect.width,
-          min(
-            _maxTileSide / rect.height,
-            sqrt(_maxTilePixels / (rect.width * rect.height)),
-          ),
-        ),
-      );
-    }
-    return (rect: rect, scale: scale);
-  }
-
-  bool _covers(Rect outer, Rect inner) =>
-      outer.left <= inner.left + 0.01 &&
-      outer.top <= inner.top + 0.01 &&
-      outer.right >= inner.right - 0.01 &&
-      outer.bottom >= inner.bottom - 0.01;
 
   /// 安全釋放 ui.Image (等下一個 frame 畫完後再釋放，避免畫到已釋放的圖)
   void _disposeImageLater(ui.Image? image) {
@@ -1192,7 +1126,16 @@ class CanvasController extends ChangeNotifier {
 
     final visible = _visiblePageRect(page);
     if (visible == null) return;
-    final plan = _planTile(page, visible);
+    final plan = TilePlanner.plan(
+      pageW: page.width,
+      pageH: page.height,
+      visLeft: visible.left,
+      visTop: visible.top,
+      visRight: visible.right,
+      visBottom: visible.bottom,
+      zoom: zoomPercentage / 100,
+      dpr: _dpr,
+    );
 
     // 1) 縮放不高，底圖已足夠清晰 → 釋放圖塊省記憶體
     if (plan.scale <= _baseScale(page) * 1.15) {
@@ -1204,7 +1147,16 @@ class CanvasController extends ChangeNotifier {
     final dr = page.detailRect;
     if (page.detailImage != null &&
         dr != null &&
-        _covers(dr, visible) &&
+        TilePlanner.covers(
+          outerL: dr.left,
+          outerT: dr.top,
+          outerR: dr.right,
+          outerB: dr.bottom,
+          innerL: visible.left,
+          innerT: visible.top,
+          innerR: visible.right,
+          innerB: visible.bottom,
+        ) &&
         plan.scale <= page.detailScale * 1.15) {
       return;
     }
@@ -1215,7 +1167,7 @@ class CanvasController extends ChangeNotifier {
         page.pdfFilePath!,
         page.pdfPageNumber!,
         plan.scale,
-        plan.rect,
+        Rect.fromLTRB(plan.left, plan.top, plan.right, plan.bottom),
       );
       if (tile == null) return;
       if (_disposed || _shownPage != page) {

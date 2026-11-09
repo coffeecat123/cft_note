@@ -1,6 +1,7 @@
 // lib/features/canvas/domain/models/stroke.dart
 import 'dart:ui';
 import 'package:perfect_freehand/perfect_freehand.dart';
+import '../../../../core/algorithms/segment_math.dart';
 import 'brush_settings.dart';
 
 class Stroke {
@@ -14,8 +15,146 @@ class Stroke {
     required this.settings,
   });
 
+  // ------------------------------------------------------------
+  // 快取：外框 (bounds) 與筆劃輪廓 Path
+  // 筆劃被移動時，points 內的 PointVector 會被「整個換新物件」，
+  // 因此用 長度 + 首尾元素的 identity 就能偵測到失效，不需手動 invalidate。
+  // ------------------------------------------------------------
+  Rect? _bounds;
+  Path? _outline;
+  int _cacheLen = -1;
+  PointVector? _cacheFirst;
+  PointVector? _cacheLast;
+
+  bool get _cacheValid =>
+      _cacheLen == points.length &&
+      (points.isEmpty ||
+          (identical(_cacheFirst, points.first) &&
+              identical(_cacheLast, points.last)));
+
+  void _refreshCache() {
+    if (_cacheValid) return;
+    _bounds = null;
+    _outline = null;
+    _cacheLen = points.length;
+    _cacheFirst = points.isEmpty ? null : points.first;
+    _cacheLast = points.isEmpty ? null : points.last;
+  }
+
+  /// 手動讓快取失效 (一般不需要呼叫)
+  void invalidate() {
+    _cacheLen = -1;
+  }
+
+  /// 所有點的外框 (不含筆刷粗細)
+  Rect get bounds {
+    _refreshCache();
+    return _bounds ??= _computeBounds();
+  }
+
+  /// 筆劃輪廓 Path (perfect_freehand 運算很貴，只算一次)
+  Path get outlinePath {
+    _refreshCache();
+    return _outline ??= _buildOutline();
+  }
+
+  Rect _computeBounds() {
+    if (points.isEmpty) return Rect.zero;
+    double minX = points.first.x, maxX = minX;
+    double minY = points.first.y, maxY = minY;
+    for (final p in points) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  Path _buildOutline() {
+    final path = Path();
+    if (points.isEmpty) return path;
+    final outline = getStroke(
+      points,
+      options: StrokeOptions(
+        size: settings.size,
+        thinning: settings.thinning,
+        smoothing: settings.smoothing,
+        streamline: settings.streamline,
+        simulatePressure: false,
+      ),
+    );
+    if (outline.isNotEmpty) {
+      path.moveTo(outline.first.dx, outline.first.dy);
+      for (int i = 1; i < outline.length; i++) {
+        path.lineTo(outline[i].dx, outline[i].dy);
+      }
+      path.close();
+    }
+    return path;
+  }
+
+  // ------------------------------------------------------------
+  // 橡皮擦碰撞：線段(膠囊體)對線段，不再只比對取樣點
+  // ------------------------------------------------------------
+  /// 實際筆寬約為 size 乘上壓感變化，取半寬的保守估計
+  static const double _halfWidthFactor = 0.3;
+
+  /// 橡皮擦從 [a] 掃到 [b]、半徑 [radius] (皆為頁面座標) 是否碰到此筆劃。
+  bool hitsCapsule(Offset a, Offset b, double radius) {
+    if (points.isEmpty) return false;
+    final reach = radius + settings.size * _halfWidthFactor;
+
+    // 外框快速排除
+    final sweep = Rect.fromPoints(a, b).inflate(reach);
+    if (!sweep.overlaps(bounds.inflate(1.0))) return false;
+
+    final r2 = reach * reach;
+    if (points.length == 1) {
+      final p = points.first;
+      return SegmentMath.pointToSegmentDistSq(p.x, p.y, a.dx, a.dy, b.dx, b.dy) <=
+          r2;
+    }
+    for (int i = 0; i < points.length - 1; i++) {
+      final p = points[i], q = points[i + 1];
+      if (SegmentMath.segmentToSegmentDistSq(
+            p.x,
+            p.y,
+            q.x,
+            q.y,
+            a.dx,
+            a.dy,
+            b.dx,
+            b.dy,
+          ) <=
+          r2) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // ------------------------------------------------------------
+  // 深層複製：points 為新 list、PointVector 為新物件，與原筆劃完全獨立
+  // ------------------------------------------------------------
+  Stroke copy() => Stroke(
+    points: points.map((p) => PointVector(p.x, p.y, p.pressure)).toList(),
+    color: color,
+    settings: settings,
+  );
+
+  // ------------------------------------------------------------
+  // JSON
+  // ------------------------------------------------------------
+  static double _finite(double? v, [double fallback = 0.0]) =>
+      v?.isFinite ?? false ? v! : fallback;
+
   Map<String, dynamic> toJson() => {
-    'points': points.map((p) => {'x': p.x, 'y': p.y, 'p': p.pressure}).toList(),
+    // NaN / Infinity 會讓 JSON 編碼失敗或寫出壞檔 → 過濾
+    'points': points
+        .where((p) => p.x.isFinite && p.y.isFinite)
+        .map((p) => {'x': p.x, 'y': p.y, 'p': _finite(p.pressure, 0.5)})
+        .toList(),
     'color': color.toARGB32(),
     'size': settings.size,
     'thinning': settings.thinning,

@@ -7,7 +7,9 @@ import '../controllers/canvas_controller.dart';
 
 class HistoryLayerPainter extends CustomPainter {
   final CanvasController controller;
-  HistoryLayerPainter(this.controller) : super(repaint: controller);
+  // 監聽控制器本身 + 縮放/平移訊號 (雙指縮放時整頁不重建，只重繪畫布)
+  HistoryLayerPainter(this.controller)
+    : super(repaint: Listenable.merge([controller, controller.viewSignal]));
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -82,7 +84,14 @@ class HistoryLayerPainter extends CustomPainter {
 class ActiveLayerPainter extends CustomPainter {
   final CanvasController controller;
   // ★ 關鍵：只監聽 activeRepaintNotifier，下筆時完全不驚動底下的 PDF！
-  ActiveLayerPainter(this.controller) : super(repaint: controller.activeRepaintNotifier);
+  // 同時監聽 viewSignal：縮放時套索框、橡皮擦圈才會跟著畫布移動
+  ActiveLayerPainter(this.controller)
+    : super(
+        repaint: Listenable.merge([
+          controller.activeRepaintNotifier,
+          controller.viewSignal,
+        ]),
+      );
 
   @override
   void paint(Canvas canvas, Size size) {

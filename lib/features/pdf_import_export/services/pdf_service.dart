@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart' show Color;
 import 'package:pdfrx/pdfrx.dart';
 
+import '../../../core/engine/tile_planner.dart';
+
 class PdfPageData {
   final double width;
   final double height;
@@ -31,14 +33,38 @@ class PdfTile {
 }
 
 class PdfService {
-  // ★ 快取已開啟的 PDF 實例，避免反覆重新打開檔案
-  static final Map<String, PdfDocument> _docCache = {};
+  // ★ 快取已開啟的 PDF 實例 (快取 Future：同時多個請求只會開一次，不會重複開檔而洩漏)
+  static final Map<String, Future<PdfDocument>> _docCache = {};
 
-  static Future<PdfDocument> _getDocument(String filePath) async {
-    if (!_docCache.containsKey(filePath)) {
-      _docCache[filePath] = await PdfDocument.openFile(filePath);
+  static Future<PdfDocument> _getDocument(String filePath) {
+    return _docCache.putIfAbsent(filePath, () {
+      final future = PdfDocument.openFile(filePath);
+      // 開檔失敗不要把失敗結果永遠留在快取裡
+      future.then<void>((_) {}, onError: (Object e) {
+        _docCache.remove(filePath); // 呼叫端自己 await future 時仍會收到錯誤
+      });
+      return future;
+    });
+  }
+
+  /// 釋放某個 PDF 檔案占用的原生資源 (筆記本被刪除、檔案不再被引用時呼叫)
+  static Future<void> evictDocument(String filePath) async {
+    final future = _docCache.remove(filePath);
+    if (future == null) return;
+    try {
+      final doc = await future;
+      final dynamic result = (doc as dynamic).dispose();
+      if (result is Future) await result;
+    } catch (e) {
+      debugPrint('evictDocument failed: $e');
     }
-    return _docCache[filePath]!;
+  }
+
+  /// 釋放所有已開啟的 PDF
+  static Future<void> closeAll() async {
+    for (final path in List<String>.of(_docCache.keys)) {
+      await evictDocument(path);
+    }
   }
 
   /// 挑選本機 PDF 並抽取各頁資訊
@@ -54,16 +80,19 @@ class PdfService {
     final document = await _getDocument(filePath);
     final List<PdfPageData> pageDataList = [];
 
-    // ★ 初始第 1 頁就乘以 DPR (如 1.5 * 2.0 = 3.0x)，保證一打開就點對點極度清晰
+    // ★ 初始第 1 頁以 DPR 渲染，保證一打開就點對點清晰；超大頁面會被記憶體上限壓低
     final double dpr = ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
-    final double initialRenderScale = dpr;
 
     for (int i = 1; i <= document.pages.length; i++) {
       final page = document.pages[i - 1];
 
       ui.Image? firstPageImage;
       if (i == 1) {
-        firstPageImage = await renderPageImage(filePath, 1, initialRenderScale);
+        firstPageImage = await renderPageImage(
+          filePath,
+          1,
+          TilePlanner.baseScale(pageW: page.width, pageH: page.height, dpr: dpr),
+        );
       }
 
       pageDataList.add(PdfPageData(
