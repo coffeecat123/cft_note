@@ -6,6 +6,7 @@ import 'package:cft_note/features/document/data/storage_service.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../../../pdf_import_export/services/image_export_service.dart';
 import '../../../pdf_import_export/services/pdf_export_service.dart';
 import '../../../pdf_import_export/services/pdf_service.dart';
 import '../../../shelf/presentation/controllers/shelf_controller.dart';
@@ -14,6 +15,8 @@ import '../controllers/canvas_controller.dart';
 import '../toolbars/brush_settings_sheet.dart';
 import '../toolbars/color_settings_sheet.dart';
 import 'canvas_painters.dart';
+import 'lasso_context_menu.dart';
+import 'screenshot_sheet.dart';
 import 'page_list_dialog.dart';
 import '../../domain/models/page_layout_mode.dart';
 
@@ -517,6 +520,20 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                 ),
               ),
 
+              // 套索：在圈選範圍內點一下 → 剪下 / 複製 / 刪除 / 截圖；空白處點一下 → 貼上
+              if (_controller.lassoMenu != LassoMenuKind.none)
+                Positioned.fill(
+                  child: LassoContextMenu(
+                    kind: _controller.lassoMenu,
+                    anchor: _controller.lassoMenuAnchor,
+                    onCut: _controller.cutSelection,
+                    onCopy: _controller.copySelection,
+                    onDelete: _controller.deleteSelection,
+                    onPaste: _controller.pasteFromClipboard,
+                    onScreenshot: _screenshotSelection,
+                  ),
+                ),
+
               if (_controller.showZoomIndicator)
                 Positioned(
                   top: 20,
@@ -551,7 +568,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                             children: [
                               Icon(
                                 _controller.hudMessage != null
-                                    ? Icons.undo
+                                    ? _controller.hudIcon
                                     : Icons.zoom_in,
                                 color: Colors.white70,
                                 size: 16,
@@ -582,6 +599,28 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           );
         },
       ),
+    );
+  }
+
+  /// 把套索圈選範圍 (最小外接矩形) 輸出成 PNG，並開啟「分享 / 存相簿 / 存檔」面板
+  Future<void> _screenshotSelection() async {
+    final messenger = ScaffoldMessenger.of(context);
+    _controller.hideLassoMenu(); // 只收起選單，圈選範圍保留
+    final png = await _controller.captureSelectionPng();
+    if (!mounted) return;
+    if (png == null) {
+      messenger.showSnackBar(const SnackBar(content: Text('截圖失敗：圈選範圍在紙張之外')));
+      return;
+    }
+    final t = DateTime.now();
+    String p(int n) => n.toString().padLeft(2, '0');
+    final stamp = '${t.year}${p(t.month)}${p(t.day)}_${p(t.hour)}${p(t.minute)}${p(t.second)}';
+    final title = ImageExportService.safeName(_controller.currentNotebook.title);
+    // 先給使用者預覽，再選擇：分享 / 存到相簿 / 儲存檔案
+    await ScreenshotSheet.show(
+      context,
+      png: png,
+      fileName: '${title}_截圖_$stamp.png',
     );
   }
 

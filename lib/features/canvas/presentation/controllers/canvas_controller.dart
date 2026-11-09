@@ -2,6 +2,7 @@
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:cft_note/features/pdf_import_export/services/pdf_service.dart';
 import 'package:cft_note/features/shelf/domain/models/notebook.dart';
@@ -17,6 +18,7 @@ import '../../domain/models/page_layout_mode.dart';
 import '../../domain/models/tools.dart';
 import '../../../document/domain/note_page.dart';
 import 'page_image_manager.dart';
+import 'region_capture.dart';
 
 // 2. 主畫布控制器 (CanvasController)
 class CanvasController extends ChangeNotifier {
@@ -359,6 +361,18 @@ class CanvasController extends ChangeNotifier {
   bool _isPotentialNewLasso = false;
   Offset _potentialLassoStart = Offset.zero;
 
+  // 套索「點一下」判定與浮動選單
+  static const double _tapSlop = 10.0; // 螢幕像素；移動超過才算拖曳
+  Offset _lassoDownScreen = Offset.zero;
+  bool _selectionDragStarted = false;
+  LassoMenuKind lassoMenu = LassoMenuKind.none;
+  Offset lassoMenuAnchor = Offset.zero; // 螢幕座標 (選單出現位置)
+  Offset _pasteScenePoint = Offset.zero;
+
+  /// 套索剪貼簿 (static：換頁、換筆記本都還在；只存在記憶體)
+  static List<Stroke> _clipboard = [];
+  bool get hasClipboard => _clipboard.isNotEmpty;
+
   List<PointVector> get currentPoints => _currentPoints;
   List<Stroke> get historyStrokes => _historyStrokes;
   List<Offset> get currentLassoDrawing => _currentLassoDrawing;
@@ -378,6 +392,7 @@ class CanvasController extends ChangeNotifier {
 
   // 浮動提示文字 (例如顯示 "已復原")
   String? hudMessage;
+  IconData hudIcon = Icons.undo;
   // ==========================================
   // ★ 多標籤頁 (Tabs) 與當前筆記本狀態
   // ==========================================
@@ -757,7 +772,9 @@ class CanvasController extends ChangeNotifier {
     _selectedLassoPolygon.clear();
     _currentLassoDrawing.clear();
     _isDraggingSelection = false;
+    _selectionDragStarted = false;
     _isPotentialNewLasso = false;
+    lassoMenu = LassoMenuKind.none;
   }
 
   // 1. 開始調色：手指按下滑桿瞬間呼叫 (記錄初始快照)
@@ -894,6 +911,7 @@ class CanvasController extends ChangeNotifier {
       _currentPoints.clear();
       _currentLassoDrawing.clear();
       _isPotentialNewLasso = false;
+      lassoMenu = LassoMenuKind.none; // 縮放 / 平移時選單位置會失準，直接收起
       eraserPosition = null;
       _lastEraseScenePoint = null;
 
@@ -943,9 +961,12 @@ class CanvasController extends ChangeNotifier {
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.lasso) {
+        lassoMenu = LassoMenuKind.none; // 任何新的觸碰都先收起選單
+        _lassoDownScreen = position;
         if (_selectedLassoPolygon.isNotEmpty &&
             RayCasting.isPointInPolygon(scenePoint, _selectedLassoPolygon)) {
           _isDraggingSelection = true;
+          _selectionDragStarted = false;
           _lastDragPosition = scenePoint;
           _totalDragDelta = Offset.zero;
         } else {
@@ -981,8 +1002,13 @@ class CanvasController extends ChangeNotifier {
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.lasso) {
-        // 套索拖曳保持不變...
         if (_isDraggingSelection) {
+          // 還在「點一下」的容許範圍內先不移動，避免點擊時筆劃微微位移
+          if (!_selectionDragStarted &&
+              (position - _lassoDownScreen).distance < _tapSlop) {
+            return;
+          }
+          _selectionDragStarted = true;
           final delta = scenePoint - _lastDragPosition;
           _lastDragPosition = scenePoint;
           _totalDragDelta += delta;
@@ -1158,16 +1184,31 @@ class CanvasController extends ChangeNotifier {
         activeRepaintNotifier.notifyListeners();
       } else if (currentTool == DrawingTool.lasso) {
         if (_isDraggingSelection) {
-          if (_totalDragDelta != Offset.zero) {
-            _undoStack.add(
-              MoveStrokesCommand(List.from(_selectedStrokes), _totalDragDelta),
-            );
-            _redoStack.clear();
-            _markDirty();
+          if (_selectionDragStarted) {
+            if (_totalDragDelta != Offset.zero) {
+              _undoStack.add(
+                MoveStrokesCommand(List.from(_selectedStrokes), _totalDragDelta),
+              );
+              _redoStack.clear();
+              _markDirty();
+            }
+          } else {
+            // 在圈選範圍內「點一下」→ 顯示 剪下 / 複製 / 刪除 / 截圖
+            lassoMenu = LassoMenuKind.selection;
+            lassoMenuAnchor = _lassoDownScreen;
           }
           _isDraggingSelection = false;
+          _selectionDragStarted = false;
         } else if (_isPotentialNewLasso) {
+          // 在範圍外 / 空白處點一下：取消選取。
+          // 本來就沒有選取、且剪貼簿有東西時 → 顯示「貼上」
+          final hadSelection = _selectedLassoPolygon.isNotEmpty;
           clearSelection();
+          if (!hadSelection && hasClipboard && isInsidePage(_potentialLassoStart)) {
+            lassoMenu = LassoMenuKind.paste;
+            lassoMenuAnchor = _lassoDownScreen;
+            _pasteScenePoint = _potentialLassoStart;
+          }
         } else if (_currentLassoDrawing.length > 2) {
           _selectedLassoPolygon.clear();
           _selectedLassoPolygon.addAll(_currentLassoDrawing);
@@ -1191,8 +1232,9 @@ class CanvasController extends ChangeNotifier {
   }
 
   // 顯示短暫的浮動膠囊提示 (800ms 自動淡出)
-  void _showHudMessage(String message) {
+  void _showHudMessage(String message, {IconData icon = Icons.undo}) {
     hudMessage = message;
+    hudIcon = icon;
     showZoomIndicator = true;
     _zoomIndicatorTimer?.cancel();
     _zoomIndicatorTimer = Timer(const Duration(milliseconds: 800), () {
@@ -1201,6 +1243,125 @@ class CanvasController extends ChangeNotifier {
       notifyListeners();
     });
     notifyListeners();
+  }
+
+  // ==========================================
+  // 套索選單動作：複製 / 剪下 / 刪除 / 貼上 / 截圖
+  // ==========================================
+  void hideLassoMenu() {
+    if (lassoMenu == LassoMenuKind.none) return;
+    lassoMenu = LassoMenuKind.none;
+    notifyListeners();
+  }
+
+  void copySelection() {
+    if (_selectedStrokes.isEmpty) return;
+    _clipboard = _selectedStrokes.map((s) => s.copy()).toList();
+    lassoMenu = LassoMenuKind.none;
+    _showHudMessage('已複製 ${_clipboard.length} 筆', icon: Icons.content_copy);
+  }
+
+  void cutSelection() {
+    if (_selectedStrokes.isEmpty) return;
+    _clipboard = _selectedStrokes.map((s) => s.copy()).toList();
+    final n = _clipboard.length;
+    _removeSelectedStrokes();
+    _showHudMessage('已剪下 $n 筆', icon: Icons.content_cut);
+  }
+
+  void deleteSelection() {
+    if (_selectedStrokes.isEmpty) return;
+    final n = _selectedStrokes.length;
+    _removeSelectedStrokes();
+    _showHudMessage('已刪除 $n 筆', icon: Icons.delete_outline);
+  }
+
+  /// 刪除目前選取的筆劃 (可復原；沿用橡皮擦命令：依移除順序記錄索引)
+  void _removeSelectedStrokes() {
+    final removed = <MapEntry<int, Stroke>>[];
+    for (final stroke in _selectedStrokes) {
+      final i = _historyStrokes.indexOf(stroke);
+      if (i == -1) continue;
+      removed.add(MapEntry(i, stroke));
+      _historyStrokes.removeAt(i);
+    }
+    if (removed.isNotEmpty) {
+      _undoStack.add(EraseStrokesCommand(removed));
+      _redoStack.clear();
+      _markDirty();
+    }
+    clearSelection();
+    _bakeHistoryToPicture();
+    activeRepaintNotifier.notifyListeners();
+    notifyListeners();
+  }
+
+  /// 把剪貼簿內容貼到剛才點的位置 (以內容中心對齊，並保持在紙張內)，貼完自動選取方便拖動
+  void pasteFromClipboard() {
+    if (_clipboard.isEmpty) return;
+    Rect? b;
+    for (final s in _clipboard) {
+      b = b == null ? s.bounds : b.expandToInclude(s.bounds);
+    }
+    if (b == null) return;
+
+    Offset shift = _pasteScenePoint - b.center;
+    final moved = b.shift(shift);
+    final pw = currentPage.width, ph = currentPage.height;
+    double dx = 0, dy = 0;
+    if (moved.right > pw) dx = pw - moved.right;
+    if (moved.bottom > ph) dy = ph - moved.bottom;
+    if (moved.left + dx < 0) dx = -moved.left;
+    if (moved.top + dy < 0) dy = -moved.top;
+    shift += Offset(dx, dy);
+
+    final pasted = _clipboard
+        .map(
+          (s) => Stroke(
+            points: s.points
+                .map((p) => PointVector(p.x + shift.dx, p.y + shift.dy, p.pressure))
+                .toList(),
+            color: s.color,
+            settings: s.settings,
+          ),
+        )
+        .toList();
+
+    _historyStrokes.addAll(pasted);
+    _undoStack.add(AddStrokesCommand(pasted));
+    _redoStack.clear();
+    _markDirty();
+
+    clearSelection();
+    _selectedStrokes.addAll(pasted);
+    final box = b.shift(shift).inflate(8);
+    _selectedLassoPolygon.addAll([
+      box.topLeft,
+      box.topRight,
+      box.bottomRight,
+      box.bottomLeft,
+    ]);
+
+    _bakeHistoryToPicture();
+    activeRepaintNotifier.notifyListeners();
+    _showHudMessage('已貼上', icon: Icons.content_paste);
+  }
+
+  /// 截圖：套索虛線的「最小外接矩形」(裁在紙張內)，輸出 PNG。含底圖與範圍內所有筆劃。
+  Future<Uint8List?> captureSelectionPng() async {
+    if (_selectedLassoPolygon.isEmpty) return null;
+    final pageRect = Rect.fromLTWH(0, 0, currentPage.width, currentPage.height);
+    final region = _boundsOf(_selectedLassoPolygon).intersect(pageRect);
+    if (region.width < 1 || region.height < 1) return null;
+
+    final dpr = ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
+    final scale = (dpr * max(1.0, zoomPercentage / 100)).clamp(2.0, 8.0).toDouble();
+    return RegionCapture.renderPng(
+      page: currentPage,
+      strokes: List.of(_historyStrokes),
+      region: region,
+      scale: scale,
+    );
   }
 
   void _calculateLassoSelection() {

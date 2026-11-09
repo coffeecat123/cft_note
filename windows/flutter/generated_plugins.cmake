@@ -3,7 +3,9 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  gal
   pdfx
+  share_plus
   url_launcher_windows
 )
 

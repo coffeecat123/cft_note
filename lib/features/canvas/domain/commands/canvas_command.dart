@@ -20,6 +20,21 @@ class DrawStrokeCommand implements CanvasCommand {
   void redo(List<Stroke> strokes) => strokes.add(stroke);
 }
 
+// 批次新增命令 (貼上)
+class AddStrokesCommand implements CanvasCommand {
+  final List<Stroke> added;
+  AddStrokesCommand(this.added);
+  @override
+  void undo(List<Stroke> strokes) {
+    for (final s in added) {
+      strokes.remove(s);
+    }
+  }
+
+  @override
+  void redo(List<Stroke> strokes) => strokes.addAll(added);
+}
+
 // 橡皮擦命令
 // erasedItems 依「移除發生的順序」記錄 (key = 移除當下的索引)。
 // 還原必須「反向重放」：最後移除的最先插回。
