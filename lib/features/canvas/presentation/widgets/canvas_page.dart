@@ -474,7 +474,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
       // 畫布主體
       body: LayoutBuilder(
         builder: (context, constraints) {
-          _controller.viewportSize = constraints.biggest;
+          _controller.updateViewportSize(constraints.biggest);
 
           return Stack(
             fit: StackFit.expand,

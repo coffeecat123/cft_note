@@ -427,9 +427,11 @@ class CanvasController extends ChangeNotifier {
       pages.add(NotePage(id: 'page_1'));
     }
 
-    // ★ 還原該筆記本上次儲存的縮放平移矩陣
+    // ★ 還原該筆記本上次儲存的縮放平移矩陣；沒有紀錄 (全新筆記) 則等取得畫面大小後置中
     if (currentNotebook.transformMatrix != null) {
       transformation = Matrix4.fromList(currentNotebook.transformMatrix!);
+    } else {
+      _needsInitialCenter = true;
     }
 
     final targetPage = currentNotebook.lastViewedPageIndex.clamp(0, pages.length - 1);
@@ -443,8 +445,7 @@ class CanvasController extends ChangeNotifier {
     // 1. 保存當前筆記本的筆劃、閱讀頁數、以及當前縮放與平移矩陣！
     _saveCurrentPageState();
     currentNotebook.lastViewedPageIndex = _savedPageIndex;
-    currentNotebook.transformMatrix = _savedMatrix(); // ★ 保存視野
-    currentNotebook.updatedAt = DateTime.now();
+    currentNotebook.transformMatrix = _savedMatrix(); // ★ 保存視野 (只存檔，不更新修改時間)
     onContentChanged?.call();
 
     // 2. 切換標籤
@@ -532,8 +533,7 @@ class CanvasController extends ChangeNotifier {
       currentPage.undoStack = List.from(_undoStack);
       currentPage.redoStack = List.from(_redoStack);
       currentNotebook.lastViewedPageIndex = _savedPageIndex;
-      currentNotebook.transformMatrix = _savedMatrix(); // ★
-      currentNotebook.updatedAt = DateTime.now();
+      currentNotebook.transformMatrix = _savedMatrix(); // ★ 視野不算內容變更，不動修改時間
     }
   }
 
@@ -554,6 +554,21 @@ class CanvasController extends ChangeNotifier {
   double minScale = 0.1; // 最小縮至 10%
   double maxScale = 100.0; // 最大放大至 10000% (分塊渲染後記憶體與倍率無關)
   Size viewportSize = Size.zero;
+
+  /// 全新筆記 (沒有存過視野)：建構當下還不知道畫面大小，等第一次排版後再置中
+  bool _needsInitialCenter = false;
+
+  /// 畫布排版後回報可視範圍 (LayoutBuilder 內呼叫)
+  void updateViewportSize(Size size) {
+    viewportSize = size;
+    if (_needsInitialCenter && !size.isEmpty && pages.isNotEmpty) {
+      _needsInitialCenter = false;
+      transformation = _placementFor(
+        currentPageIndex.clamp(0, pages.length - 1),
+        1.0,
+      );
+    }
+  }
   // 獲取當前縮放百分比 (例如 1.0x -> 100%, 2.5x -> 250%)
   double get zoomPercentage {
     final double scaleX = sqrt(
@@ -600,7 +615,7 @@ class CanvasController extends ChangeNotifier {
 
   void _startZoomIndicatorFadeout() {
     _zoomIndicatorTimer?.cancel();
-    _zoomIndicatorTimer = Timer(const Duration(milliseconds: 1000), () {
+    _zoomIndicatorTimer = Timer(const Duration(milliseconds: 1500), () {
       showZoomIndicator = false;
       notifyListeners();
     });
@@ -1229,6 +1244,10 @@ class CanvasController extends ChangeNotifier {
       // ★ 雙指縮放放開時，自動向 pdfrx 索取高清渲染
       if (wasScaling) {
         refreshDetail();
+      }
+      // ★ 手指全部離開後，倍率膠囊過一會兒自動消失 (文字訊息自己有計時器)
+      if (showZoomIndicator && hudMessage == null) {
+        _startZoomIndicatorFadeout();
       }
     }
     notifyListeners();

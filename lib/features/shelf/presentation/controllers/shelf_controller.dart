@@ -153,6 +153,17 @@ class ShelfController extends ChangeNotifier {
       debugPrint('讀取 session 失敗 (忽略)：$e');
     }
 
+    // 預先開啟上次正在看的 PDF，使用者點進筆記時目前頁可以更快出現
+    if (openTabs.isNotEmpty) {
+      final nb = openTabs[activeTabIndex.clamp(0, openTabs.length - 1)];
+      if (nb.pages.isNotEmpty) {
+        final page =
+            nb.pages[nb.lastViewedPageIndex.clamp(0, nb.pages.length - 1)];
+        final path = page.pdfFilePath;
+        if (path != null) PdfService.warmUp(path);
+      }
+    }
+
     _collectStorageWarnings();
     isLoading = false;
     notifyListeners();

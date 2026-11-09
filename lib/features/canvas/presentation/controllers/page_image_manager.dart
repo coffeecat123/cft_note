@@ -78,9 +78,25 @@ class PageImageManager {
       if (!next.contains(p) && p != _shown) _release(p);
     }
     for (final p in next) {
-      unawaited(loadBase(p));
+      // 目前頁永遠優先：其他可視頁等它載完才開始，避免搶走 PDF 解析與渲染資源
+      unawaited(p == _shown ? loadBase(p) : _loadAfterShown(p));
     }
   }
+
+  Future<void> _loadAfterShown(NotePage page) async {
+    final shown = _shown;
+    if (shown != null && shown != page) {
+      // 目前頁還沒載好 → 先讓它載 (已在載入中就等它；否則由這裡直接代為載入)
+      if (shown.cachedBackgroundImage == null && shown.pdfFilePath != null) {
+        await loadBase(shown);
+      }
+    }
+    if (_disposed || !_wanted(page)) return;
+    await loadBase(page);
+  }
+
+  /// 這次 App 執行期間已經載入過的 PDF 檔 (第一次開啟才需要先出預覽圖)
+  final Set<String> _seenPdfs = {};
 
   bool _wanted(NotePage page) => page == _shown || _visible.contains(page);
 
@@ -93,16 +109,45 @@ class PageImageManager {
       return;
     }
     try {
+      final path = page.pdfFilePath!;
+      final full = baseScale(page);
+      ui.Image? previewImage; // 第一次載入時的低解析度預覽，正式圖完成後取代它
+
+      // ★ 開啟 App 後第一次載入這份 PDF：先用低解析度快速把「目前頁」顯示出來，
+      //   再接著渲染正式解析度的底圖取代它 (大頁面 / 高 DPR 時差很多)
+      if (page == _shown && _seenPdfs.add(path) && full > 1.5) {
+        final preview = await PdfService.renderPageImage(
+          path,
+          page.pdfPageNumber!,
+          1.0,
+        );
+        if (preview != null) {
+          if (_disposed || !_wanted(page) || page.cachedBackgroundImage != null) {
+            preview.dispose();
+          } else {
+            page.cachedBackgroundImage = preview;
+            previewImage = preview;
+            _onChanged();
+          }
+        }
+      } else {
+        _seenPdfs.add(path);
+      }
+
       final image = await PdfService.renderPageImage(
-        page.pdfFilePath!,
+        path,
         page.pdfPageNumber!,
-        baseScale(page),
+        full,
       );
       if (image == null) return;
-      if (_disposed || !_wanted(page) || page.cachedBackgroundImage != null) {
+      final current = page.cachedBackgroundImage;
+      // 目前沒圖，或目前的圖就是我們自己的預覽 → 才能放上正式圖
+      final canReplace = current == null || identical(current, previewImage);
+      if (_disposed || !_wanted(page) || !canReplace) {
         image.dispose(); // 等待期間已切走 / 已被別處載入，這張沒人要了
       } else {
         page.cachedBackgroundImage = image;
+        if (current != null) _disposeImageLater(current); // 換掉預覽圖
         _onChanged();
       }
     } finally {

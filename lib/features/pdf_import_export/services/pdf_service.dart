@@ -47,6 +47,13 @@ class PdfService {
     });
   }
 
+  /// 預先開啟 PDF (只解析檔案、不渲染)，讓使用者點進筆記時不必再等開檔
+  static void warmUp(String filePath) {
+    _getDocument(filePath).then<void>((_) {}, onError: (Object e) {
+      debugPrint('warmUp failed: $e');
+    });
+  }
+
   /// 釋放某個 PDF 檔案占用的原生資源 (筆記本被刪除、檔案不再被引用時呼叫)
   static Future<void> evictDocument(String filePath) async {
     final future = _docCache.remove(filePath);
