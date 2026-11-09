@@ -24,12 +24,6 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # 4. 安裝 iOS 原生依賴
-      - name: Install CocoaPods
-        run: |
-          cd ios
-          pod install
-
       # 5. 編譯未簽章 iOS App
       - name: Build iOS
         run: flutter build ios --release --no-codesign
