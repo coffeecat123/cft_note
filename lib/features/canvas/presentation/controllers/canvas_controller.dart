@@ -13,6 +13,7 @@ import '../../../../core/engine/repaint_signal.dart';
 import '../../domain/models/brush_settings.dart';
 import '../../domain/models/stroke.dart';
 import '../../domain/commands/canvas_command.dart';
+import '../../domain/models/page_layout_mode.dart';
 import '../../domain/models/tools.dart';
 import '../../../document/domain/note_page.dart';
 import 'page_image_manager.dart';
@@ -43,6 +44,7 @@ class CanvasController extends ChangeNotifier {
     transform: () => transformation,
     viewportSize: () => viewportSize,
     zoom: () => zoomPercentage / 100,
+    focus: _detailFocus,
     onChanged: notifyListeners,
   );
 
@@ -51,6 +53,265 @@ class CanvasController extends ChangeNotifier {
 
   NotePage get currentPage => pages[currentPageIndex];
   int get totalPages => pages.length;
+
+  // ==========================================
+  // ★ 頁面顯示方式：單頁 / 往下連續 / 往右連續
+  //   筆劃永遠存成「頁面自己的座標」；連續模式只是把每頁放在畫布的不同位置，
+  //   目前編輯頁的位置 (currentPageOrigin) 會在輸入座標轉換時扣掉。
+  // ==========================================
+  static const double pageGap = 16.0; // 連續模式下頁與頁的間隔
+  PageLayoutMode layoutMode = PageLayoutMode.single;
+  bool get isContinuous => layoutMode.isContinuous;
+
+  List<Offset>? _origins;
+  List<NotePage>? _originsPages;
+  int _originsLen = -1;
+  PageLayoutMode? _originsMode;
+
+  /// 每一頁左上角在畫布座標中的位置 (單頁模式全部為 0)
+  List<Offset> get _pageOrigins {
+    final cached = _origins;
+    if (cached != null &&
+        identical(_originsPages, pages) &&
+        _originsLen == pages.length &&
+        _originsMode == layoutMode) {
+      return cached;
+    }
+    final list = <Offset>[];
+    switch (layoutMode) {
+      case PageLayoutMode.single:
+        for (int i = 0; i < pages.length; i++) {
+          list.add(Offset.zero);
+        }
+        break;
+      case PageLayoutMode.vertical:
+        double maxW = 0;
+        for (final p in pages) {
+          maxW = max(maxW, p.width);
+        }
+        double y = 0;
+        for (final p in pages) {
+          list.add(Offset((maxW - p.width) / 2, y));
+          y += p.height + pageGap;
+        }
+        break;
+      case PageLayoutMode.horizontal:
+        double maxH = 0;
+        for (final p in pages) {
+          maxH = max(maxH, p.height);
+        }
+        double x = 0;
+        for (final p in pages) {
+          list.add(Offset(x, (maxH - p.height) / 2));
+          x += p.width + pageGap;
+        }
+        break;
+    }
+    _origins = list;
+    _originsPages = pages;
+    _originsLen = pages.length;
+    _originsMode = layoutMode;
+    return list;
+  }
+
+  Offset pageOrigin(int i) {
+    final o = _pageOrigins;
+    return (i >= 0 && i < o.length) ? o[i] : Offset.zero;
+  }
+
+  Offset get currentPageOrigin => pageOrigin(currentPageIndex);
+
+  Rect pageSceneRect(int i) {
+    final p = pages[i];
+    final o = pageOrigin(i);
+    return Rect.fromLTWH(o.dx, o.dy, p.width, p.height);
+  }
+
+  /// 螢幕可視範圍對應到畫布座標
+  Rect get viewSceneRect => viewportSize.isEmpty
+      ? Rect.zero
+      : MatrixUtils.inverseTransformRect(transformation, Offset.zero & viewportSize);
+
+  /// 與 [sceneRect] 有重疊的頁面 (單頁模式只有目前頁)
+  List<int> visiblePageIndices(Rect sceneRect) {
+    if (!isContinuous) return [currentPageIndex];
+    final out = <int>[];
+    for (int i = 0; i < pages.length; i++) {
+      if (pageSceneRect(i).overlaps(sceneRect)) out.add(i);
+    }
+    return out;
+  }
+
+  /// 離畫面中心最近的頁面 (中心點落在某頁內就是那一頁)；單頁模式就是目前頁
+  int get focusPageIndex {
+    if (!isContinuous || viewportSize.isEmpty || pages.isEmpty) {
+      return currentPageIndex;
+    }
+    final center = viewSceneRect.center;
+    int best = currentPageIndex.clamp(0, pages.length - 1);
+    double bestD = double.infinity;
+    for (int i = 0; i < pages.length; i++) {
+      final r = pageSceneRect(i);
+      // 中心點到該頁矩形的距離 (在頁內為 0)
+      final dx = max(max(r.left - center.dx, center.dx - r.right), 0.0);
+      final dy = max(max(r.top - center.dy, center.dy - r.bottom), 0.0);
+      final d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+        if (d == 0) break; // 中心就在這頁內
+      }
+    }
+    return best;
+  }
+
+  PageFocus? _detailFocus() {
+    if (pages.isEmpty) return null;
+    final i = (isContinuous ? focusPageIndex : currentPageIndex).clamp(
+      0,
+      pages.length - 1,
+    );
+    return PageFocus(pages[i], pageOrigin(i));
+  }
+
+  /// 把第 [index] 頁放進畫面：水平、垂直都置中 (頁面比畫面大時，四邊對稱裁切)
+  Matrix4 _placementFor(int index, double scale) {
+    final p = pages[index];
+    final o = pageOrigin(index);
+    if (viewportSize.isEmpty) {
+      return Matrix4.translationValues(-scale * o.dx, 30.0 - scale * o.dy, 0.0) *
+          Matrix4.diagonal3Values(scale, scale, 1.0);
+    }
+    final tx = (viewportSize.width - p.width * scale) / 2 - scale * o.dx;
+    final ty = (viewportSize.height - p.height * scale) / 2 - scale * o.dy;
+    return Matrix4.translationValues(tx, ty, 0.0) *
+        Matrix4.diagonal3Values(scale, scale, 1.0);
+  }
+
+  /// 連續模式：把目前編輯頁放進畫面 (保持目前縮放)
+  void _placeCurrent() {
+    if (viewportSize.isEmpty) return;
+    transformation = _placementFor(currentPageIndex, zoomPercentage / 100);
+    notifyListeners();
+    refreshDetail();
+  }
+
+  /// 連續模式下可視 (含預載邊界) 的頁面才載入底圖，最多同時 8 頁，避免縮很小時爆記憶體
+  void _syncVisiblePages() {
+    if (!isContinuous || viewportSize.isEmpty) {
+      images.setVisible(const []);
+      return;
+    }
+    final view = viewSceneRect;
+    final margin = max(view.width, view.height) * 0.3;
+    final indices = visiblePageIndices(view.inflate(margin));
+    final focus = focusPageIndex;
+    indices.sort((a, b) => (a - focus).abs().compareTo((b - focus).abs()));
+    images.setVisible(indices.take(8).map((i) => pages[i]));
+  }
+
+  /// 連續模式：目前編輯頁 := 畫面上最主要的那一頁 (插入/刪除/翻頁前呼叫)
+  void syncCurrentToFocus() {
+    if (!isContinuous) return;
+    final i = focusPageIndex;
+    if (i != currentPageIndex) {
+      _saveCurrentPageState();
+      _loadPageState(i);
+    }
+  }
+
+  void setLayoutMode(PageLayoutMode mode) {
+    if (mode == layoutMode) return;
+    if (isContinuous) {
+      syncCurrentToFocus(); // 離開連續模式前，把「看到的那頁」變成目前頁
+    } else {
+      _saveCurrentPageState();
+    }
+    final scale = zoomPercentage / 100;
+    layoutMode = mode;
+    clearSelection();
+    eraserPosition = null;
+    if (!isContinuous) _clearPictureCache();
+    if (!viewportSize.isEmpty) {
+      transformation = _placementFor(currentPageIndex, scale);
+    }
+    _syncVisiblePages();
+    notifyListeners();
+    images.refreshDetail();
+  }
+
+  Timer? _scrollSettleTimer;
+
+  /// 滑鼠滾輪 / 觸控板捲動 (只在連續模式有效)
+  void onScroll(Offset delta) {
+    if (!isContinuous) return;
+    double dx = delta.dx, dy = delta.dy;
+    if (layoutMode == PageLayoutMode.horizontal && dx == 0) {
+      dx = dy; // 橫向模式：滾輪上下 = 左右移動
+      dy = 0;
+    }
+    transformation = Matrix4.translationValues(-dx, -dy, 0.0) * transformation;
+    _syncVisiblePages();
+    viewSignal.fire();
+    _scrollSettleTimer?.cancel();
+    _scrollSettleTimer = Timer(const Duration(milliseconds: 150), refreshDetail);
+  }
+
+  // ---- 非編輯頁的筆劃 Picture 快取 (編輯頁用 cachedHistoryPicture) ----
+  final Map<NotePage, ui.Picture> _pagePictures = {};
+
+  ui.Picture? pictureFor(int i) {
+    if (i == currentPageIndex) return cachedHistoryPicture;
+    final page = pages[i];
+    if (page.strokes.isEmpty) return null;
+    return _pagePictures[page] ??= _bakeStrokes(page.strokes);
+  }
+
+  ui.Picture _bakeStrokes(List<Stroke> strokes) {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final paint = Paint()..style = PaintingStyle.fill;
+    for (final stroke in strokes) {
+      paint.color = stroke.color;
+      canvas.drawPath(stroke.outlinePath, paint);
+    }
+    return recorder.endRecording();
+  }
+
+  void _dropPicture(NotePage page) {
+    _disposePictureLater(_pagePictures.remove(page));
+  }
+
+  void _clearPictureCache() {
+    for (final pic in _pagePictures.values) {
+      _disposePictureLater(pic);
+    }
+    _pagePictures.clear();
+  }
+
+  /// 快取太多時，丟掉不在 [keep] 內的頁面
+  void trimPictureCache(Set<int> keep) {
+    if (_pagePictures.length <= 12) return;
+    final keepPages = <NotePage>{
+      for (final i in keep)
+        if (i >= 0 && i < pages.length) pages[i],
+    };
+    final drop = _pagePictures.keys.where((p) => !keepPages.contains(p)).toList();
+    for (final p in drop) {
+      _dropPicture(p);
+    }
+  }
+
+  int get _savedPageIndex => isContinuous ? focusPageIndex : currentPageIndex;
+
+  /// 存檔用的視野矩陣：一律換算成「該頁位於原點」的單頁座標，兩種模式通用
+  List<double> _savedMatrix() {
+    if (!isContinuous) return transformation.storage.toList();
+    final o = pageOrigin(focusPageIndex);
+    return (transformation * Matrix4.translationValues(o.dx, o.dy, 0.0))
+        .storage
+        .toList();
+  }
 
   // ★ 獨立通知器：只驅動最上層的即時筆劃 (不驚動歷史層與 PDF)
   final ChangeNotifier activeRepaintNotifier = ChangeNotifier();
@@ -163,8 +424,8 @@ class CanvasController extends ChangeNotifier {
 
     // 1. 保存當前筆記本的筆劃、閱讀頁數、以及當前縮放與平移矩陣！
     _saveCurrentPageState();
-    currentNotebook.lastViewedPageIndex = currentPageIndex;
-    currentNotebook.transformMatrix = transformation.storage.toList(); // ★ 保存視野
+    currentNotebook.lastViewedPageIndex = _savedPageIndex;
+    currentNotebook.transformMatrix = _savedMatrix(); // ★ 保存視野
     currentNotebook.updatedAt = DateTime.now();
     onContentChanged?.call();
 
@@ -180,7 +441,13 @@ class CanvasController extends ChangeNotifier {
 
     // 3. ★ 還原目標筆記本的縮放與平移矩陣
     if (currentNotebook.transformMatrix != null) {
-      transformation = Matrix4.fromList(currentNotebook.transformMatrix!);
+      var restored = Matrix4.fromList(currentNotebook.transformMatrix!);
+      if (isContinuous) {
+        // 存的是「該頁在原點」的矩陣，換回連續版面中的位置
+        final o = pageOrigin(currentPageIndex);
+        restored = restored * Matrix4.translationValues(-o.dx, -o.dy, 0.0);
+      }
+      transformation = restored;
     } else {
       resetZoom(); // 若無紀錄則置中
     }
@@ -215,7 +482,7 @@ class CanvasController extends ChangeNotifier {
     // 1. 如果關閉的是當前選中的標籤，先保存當前頁面
     if (index == activeNotebookIndex) {
       _saveCurrentPageState();
-      currentNotebook.lastViewedPageIndex = currentPageIndex;
+      currentNotebook.lastViewedPageIndex = _savedPageIndex;
     }
 
     // 2. 移除該標籤
@@ -246,8 +513,8 @@ class CanvasController extends ChangeNotifier {
       currentPage.strokes = List.from(_historyStrokes);
       currentPage.undoStack = List.from(_undoStack);
       currentPage.redoStack = List.from(_redoStack);
-      currentNotebook.lastViewedPageIndex = currentPageIndex;
-      currentNotebook.transformMatrix = transformation.storage.toList(); // ★
+      currentNotebook.lastViewedPageIndex = _savedPageIndex;
+      currentNotebook.transformMatrix = _savedMatrix(); // ★
       currentNotebook.updatedAt = DateTime.now();
     }
   }
@@ -281,31 +548,16 @@ class CanvasController extends ChangeNotifier {
   // 一鍵重設回 100% 原始大小
   void resetZoom() {
     hudMessage = null; // ★ 清空訊息，保證顯示 100%
-    final double pageWidth = currentPage.width;
-    final double pageHeight = currentPage.height;
+    if (pages.isEmpty) return;
 
-    double tx = 0.0;
-    double ty = 30.0; // 預設頂部留 30px 舒適邊距
-
-    if (viewportSize.width > 0 && viewportSize.height > 0) {
-      // 1. 水平居中：(螢幕寬 - 紙張寬) / 2
-      tx = (viewportSize.width - pageWidth) / 2;
-
-      // 2. 垂直居中：若紙張比螢幕矮則垂直置中；若比螢幕高則頂部留 30px 邊距便於閱讀
-      if (pageHeight < viewportSize.height) {
-        ty = (viewportSize.height - pageHeight) / 2;
-      } else {
-        ty = 30.0;
-      }
-    }
-
-    // 設定為 100% (Scale = 1.0) 且平移至正中心
-    transformation = Matrix4.translationValues(tx, ty, 0.0);
+    // 設定為 100% (Scale = 1.0)，並把目前看的那一頁放到畫面中心
+    final index = isContinuous ? focusPageIndex : currentPageIndex;
+    transformation = _placementFor(index.clamp(0, pages.length - 1), 1.0);
 
     showZoomIndicator = true;
     _startZoomIndicatorFadeout();
     notifyListeners();
-    images.refreshDetail();
+    refreshDetail();
   }
 
   @override
@@ -313,6 +565,8 @@ class CanvasController extends ChangeNotifier {
     images.dispose();
     _saveCurrentPageState(); // ★ 核心修復：退出畫布時，立即把筆跡存回當前頁面！
     _zoomIndicatorTimer?.cancel();
+    _scrollSettleTimer?.cancel();
+    _clearPictureCache();
     activeRepaintNotifier.dispose();
     viewSignal.dispose();
     _disposePictureLater(cachedHistoryPicture);
@@ -366,6 +620,8 @@ class CanvasController extends ChangeNotifier {
 
     // 離開的頁面釋放圖塊與底圖，避免翻頁越翻越吃記憶體
     images.setShown(targetPage);
+    _dropPicture(targetPage); // 目前頁改用即時的 cachedHistoryPicture
+    _syncVisiblePages();
 
     _historyStrokes.clear();
     _historyStrokes.addAll(targetPage.strokes);
@@ -387,6 +643,10 @@ class CanvasController extends ChangeNotifier {
 
   // 下一頁
   void nextPage() {
+    if (isContinuous) {
+      goToPage(focusPageIndex + 1);
+      return;
+    }
     if (currentPageIndex < pages.length - 1) {
       _saveCurrentPageState();
       _loadPageState(currentPageIndex + 1);
@@ -395,6 +655,10 @@ class CanvasController extends ChangeNotifier {
 
   // 上一頁
   void previousPage() {
+    if (isContinuous) {
+      goToPage(focusPageIndex - 1);
+      return;
+    }
     if (currentPageIndex > 0) {
       _saveCurrentPageState();
       _loadPageState(currentPageIndex - 1);
@@ -403,7 +667,16 @@ class CanvasController extends ChangeNotifier {
 
   /// 直接跳到指定頁 (0-based)
   void goToPage(int index) {
-    if (index < 0 || index >= pages.length || index == currentPageIndex) return;
+    if (index < 0 || index >= pages.length) return;
+    if (isContinuous) {
+      if (index != currentPageIndex) {
+        _saveCurrentPageState();
+        _loadPageState(index);
+      }
+      _placeCurrent(); // 連續模式：捲動到該頁
+      return;
+    }
+    if (index == currentPageIndex) return;
     _saveCurrentPageState();
     _loadPageState(index);
   }
@@ -416,14 +689,17 @@ class CanvasController extends ChangeNotifier {
   void deleteCurrentPage() {
     if (!canDeleteCurrentPage) return;
     final removeIndex = currentPageIndex;
-    pages.removeAt(removeIndex);
+    final removed = pages.removeAt(removeIndex);
+    _dropPicture(removed);
     _markDirty();
     // _loadPageState 會釋放被刪頁面的底圖/圖塊 (images.setShown 會釋放前一個顯示的頁面)
     _loadPageState(removeIndex.clamp(0, pages.length - 1));
+    if (isContinuous) _placeCurrent();
   }
 
   // 在此頁後面插入一頁空白頁
   void insertBlankPageAfterCurrent() {
+    syncCurrentToFocus();
     _saveCurrentPageState();
     final newPage = NotePage(
       id: 'page_${DateTime.now().millisecondsSinceEpoch}',
@@ -432,9 +708,11 @@ class CanvasController extends ChangeNotifier {
     pages.insert(currentPageIndex + 1, newPage);
     _markDirty();
     _loadPageState(currentPageIndex + 1);
+    if (isContinuous) _placeCurrent();
   }
 
   Future<void> insertPdfPagesAfterCurrent(List<PdfPageData> pdfPages) async {
+    syncCurrentToFocus();
     _saveCurrentPageState();
 
     final List<NotePage> newPages = [];
@@ -455,6 +733,7 @@ class CanvasController extends ChangeNotifier {
     pages.insertAll(currentPageIndex + 1, newPages);
     _markDirty();
     _loadPageState(currentPageIndex + 1);
+    if (isContinuous) _placeCurrent();
   }
 
   void setTool(DrawingTool tool) {
@@ -584,9 +863,26 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  /// 螢幕座標 → 「目前編輯頁」自己的座標 (連續模式會扣掉該頁在畫布上的位置)
   Offset toScene(Offset screenPoint) {
     final Matrix4 inverse = Matrix4.inverted(transformation);
-    return MatrixUtils.transformPoint(inverse, screenPoint);
+    return MatrixUtils.transformPoint(inverse, screenPoint) - currentPageOrigin;
+  }
+
+  /// 連續模式：手指落在哪一頁，就切換成編輯哪一頁 (落在頁面外則維持原本)
+  void _activatePageAt(Offset screenPoint) {
+    final raw = MatrixUtils.transformPoint(
+      Matrix4.inverted(transformation),
+      screenPoint,
+    );
+    if (pageSceneRect(currentPageIndex).contains(raw)) return;
+    for (int i = 0; i < pages.length; i++) {
+      if (pageSceneRect(i).contains(raw)) {
+        _saveCurrentPageState();
+        _loadPageState(i);
+        return;
+      }
+    }
   }
 
   // 1. 手指落下
@@ -632,6 +928,7 @@ class CanvasController extends ChangeNotifier {
       _previousDistance = (points[0] - points[1]).distance;
       _previousMidpoint = (points[0] + points[1]) / 2;
     } else if (!_isScalingLocked && _pointerPositions.length == 1) {
+      if (isContinuous) _activatePageAt(position);
       final scenePoint = toScene(position);
 
       if (currentTool == DrawingTool.pen) {
@@ -781,6 +1078,7 @@ class CanvasController extends ChangeNotifier {
             );
 
         transformation = deltaMatrix * transformation;
+        if (isContinuous) _syncVisiblePages();
 
         // 顯示縮放膠囊
         showZoomIndicator = true;
@@ -886,7 +1184,7 @@ class CanvasController extends ChangeNotifier {
 
       // ★ 雙指縮放放開時，自動向 pdfrx 索取高清渲染
       if (wasScaling) {
-        images.refreshDetail();
+        refreshDetail();
       }
     }
     notifyListeners();
@@ -1038,9 +1336,8 @@ class CanvasController extends ChangeNotifier {
 
   // ★ 標籤拖曳交換順序
   void reorderTabs(int oldIndex, int newIndex) {
-    if (oldIndex < newIndex) {
-      newIndex -= 1; // 修正 Flutter ReorderableList 的索引偏移
-    }
+    // 注意：ReorderableListView.onReorderItem 給的 newIndex 已經是修正過的最終位置，
+    // 不可以再 -1 (舊的 onReorder 才需要)，否則往右拖會少移一格、放手後彈回原位。
 
     // 1. 記錄當前正在看的筆記本 ID
     final currentActiveId = currentNotebook.id;
@@ -1058,5 +1355,8 @@ class CanvasController extends ChangeNotifier {
   }
 
   /// 供外部 (排版完成後) 呼叫
-  void refreshDetail() => images.refreshDetail();
+  void refreshDetail() {
+    _syncVisiblePages();
+    images.refreshDetail();
+  }
 }

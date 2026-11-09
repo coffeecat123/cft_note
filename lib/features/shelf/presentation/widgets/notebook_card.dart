@@ -141,48 +141,7 @@ class NotebookCard extends StatelessWidget {
                   if (val == 'delete') onDelete();
                   if (val == 'export') onExport();
                 },
-                itemBuilder: (ctx) => [
-                  const PopupMenuItem(
-                    value: 'export',
-                    child: Row(
-                      children: [
-                        Icon(Icons.picture_as_pdf_outlined, size: 18, color: Colors.blueAccent),
-                        SizedBox(width: 8),
-                        Text('匯出為 PDF', style: TextStyle(fontSize: 13, color: Colors.blueAccent)),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'rename',
-                    child: Row(
-                      children: [
-                        Icon(Icons.edit_outlined, size: 18),
-                        SizedBox(width: 8),
-                        Text('重新命名', style: TextStyle(fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'duplicate',
-                    child: Row(
-                      children: [
-                        Icon(Icons.copy_outlined, size: 18),
-                        SizedBox(width: 8),
-                        Text('製作副本', style: TextStyle(fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'delete',
-                    child: Row(
-                      children: [
-                        Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
-                        SizedBox(width: 8),
-                        Text('刪除', style: TextStyle(fontSize: 13, color: Colors.redAccent)),
-                      ],
-                    ),
-                  ),
-                ],
+                itemBuilder: (ctx) => menuItems(),
               ),
             ],
           ),
@@ -190,6 +149,50 @@ class NotebookCard extends StatelessWidget {
       ),
     );
   }
+
+  /// 選單項目 (清單模式的列也共用)
+  static List<PopupMenuEntry<String>> menuItems() => [
+          const PopupMenuItem(
+            value: 'export',
+            child: Row(
+              children: [
+                Icon(Icons.picture_as_pdf_outlined, size: 18, color: Colors.blueAccent),
+                SizedBox(width: 8),
+                Text('匯出為 PDF', style: TextStyle(fontSize: 13, color: Colors.blueAccent)),
+              ],
+            ),
+          ),
+          const PopupMenuItem(
+            value: 'rename',
+            child: Row(
+              children: [
+                Icon(Icons.edit_outlined, size: 18),
+                SizedBox(width: 8),
+                Text('重新命名', style: TextStyle(fontSize: 13)),
+              ],
+            ),
+          ),
+          const PopupMenuItem(
+            value: 'duplicate',
+            child: Row(
+              children: [
+                Icon(Icons.copy_outlined, size: 18),
+                SizedBox(width: 8),
+                Text('製作副本', style: TextStyle(fontSize: 13)),
+              ],
+            ),
+          ),
+          const PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                SizedBox(width: 8),
+                Text('刪除', style: TextStyle(fontSize: 13, color: Colors.redAccent)),
+              ],
+            ),
+          ),
+  ];
 
   String _formatDate(DateTime dt) {
     final now = DateTime.now();

@@ -16,16 +16,39 @@ class HistoryLayerPainter extends CustomPainter {
     canvas.save();
     canvas.transform(controller.transformation.storage);
 
-    final double pageWidth = controller.currentPage.width;
-    final double pageHeight = controller.currentPage.height;
+    // 單頁模式只畫目前頁；連續模式畫所有與畫面重疊的頁面
+    final Rect view = MatrixUtils.inverseTransformRect(
+      controller.transformation,
+      Offset.zero & size,
+    );
+    final indices = controller.visiblePageIndices(view);
+    final continuous = controller.isContinuous;
+
+    for (final i in indices) {
+      final origin = controller.pageOrigin(i);
+      canvas.save();
+      canvas.translate(origin.dx, origin.dy);
+      _paintPage(canvas, i, continuous);
+      canvas.restore();
+    }
+
+    canvas.restore();
+
+    if (continuous) controller.trimPictureCache(indices.toSet());
+  }
+
+  void _paintPage(Canvas canvas, int index, bool continuous) {
+    final page = controller.pages[index];
+    final double pageWidth = page.width;
+    final double pageHeight = page.height;
     final Rect pageRect = Rect.fromLTWH(0, 0, pageWidth, pageHeight);
 
-    // 1. 底層陰影
-    final shadowPaint = Paint()
-      ..color = Colors.black.withAlpha(50)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16);
+    // 1. 底層陰影 (連續模式頁面很多，且有間隔襯底，不畫模糊陰影以保持順暢)
     // 放大後紙張邊緣多半在畫面外，且模糊半徑會跟著放大 → 高倍率時略過，避免超大離屏緩衝
-    if (controller.zoomPercentage < 250) {
+    if (!continuous && controller.zoomPercentage < 250) {
+      final shadowPaint = Paint()
+        ..color = Colors.black.withAlpha(50)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16);
       canvas.drawRect(pageRect.shift(const Offset(0, 6)), shadowPaint);
     }
 
@@ -33,7 +56,7 @@ class HistoryLayerPainter extends CustomPainter {
     canvas.drawRect(pageRect, Paint()..color = Colors.white);
 
     // 3. 繪製高解析度 PDF
-    final bgImage = controller.currentPage.cachedBackgroundImage;
+    final bgImage = page.cachedBackgroundImage;
     if (bgImage != null) {
       // ★ 改用 FilterQuality.medium，消除文字邊緣的糊化效果，邊緣字體極為銳利
       final imagePaint = Paint()..filterQuality = FilterQuality.medium;
@@ -44,8 +67,8 @@ class HistoryLayerPainter extends CustomPainter {
         pageRect,
         imagePaint,
       );
-    } else {
-      // 空白頁橫線
+    } else if (page.pdfFilePath == null) {
+      // 空白頁橫線 (PDF 頁面底圖載入中時保持純白，不閃橫線)
       final linePaint = Paint()
         ..color = Colors.grey.withAlpha(40)
         ..strokeWidth = 1.0;
@@ -55,8 +78,8 @@ class HistoryLayerPainter extends CustomPainter {
     }
 
     // 3.5 ★ 分塊高清圖塊：只覆蓋可視區域，疊在低解析度底圖之上
-    final detail = controller.currentPage.detailImage;
-    final detailRect = controller.currentPage.detailRect;
+    final detail = page.detailImage;
+    final detailRect = page.detailRect;
     if (detail != null && detailRect != null) {
       canvas.drawImageRect(
         detail,
@@ -67,13 +90,14 @@ class HistoryLayerPainter extends CustomPainter {
     }
 
     // 4. ★ 核心硬體裁切：筆劃超出紙張部分由 GPU 自然切除，不顯現在工作桌上
+    canvas.save();
     canvas.clipRect(pageRect);
 
     // 5. 繪製歷史手寫筆畫
-    if (controller.cachedHistoryPicture != null) {
-      canvas.drawPicture(controller.cachedHistoryPicture!);
+    final picture = controller.pictureFor(index);
+    if (picture != null) {
+      canvas.drawPicture(picture);
     }
-
     canvas.restore();
   }
 
@@ -97,6 +121,9 @@ class ActiveLayerPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.transform(controller.transformation.storage);
+    // 連續模式：筆劃、套索、橡皮擦都是「目前編輯頁」的座標，移到該頁的位置再畫
+    final Offset pageOrigin = controller.currentPageOrigin;
+    canvas.translate(pageOrigin.dx, pageOrigin.dy);
 
     final Rect pageRect = Rect.fromLTWH(0, 0, controller.currentPage.width, controller.currentPage.height);
 

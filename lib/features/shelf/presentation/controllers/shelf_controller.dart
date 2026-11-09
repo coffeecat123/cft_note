@@ -5,6 +5,7 @@ import '../../../document/data/storage_service.dart';
 import '../../../pdf_import_export/services/pdf_service.dart';
 import '../../domain/models/note_folder.dart';
 import '../../domain/models/notebook.dart';
+import '../../domain/models/shelf_view_options.dart';
 
 class ShelfController extends ChangeNotifier {
   List<Notebook> notebooks = [];
@@ -35,12 +36,61 @@ class ShelfController extends ChangeNotifier {
     }
   }
 
-  // 取得當前目錄下的資料夾與筆記本
-  List<NoteFolder> get currentFolders =>
-      folders.where((f) => f.parentFolderId == currentFolderId).toList();
+  // ------------------------------------------
+  // 顯示方式與排序 (僅存在記憶體，重開 App 會回到預設)
+  // ------------------------------------------
+  ShelfViewMode viewMode = ShelfViewMode.grid;
+  ShelfSortKey sortKey = ShelfSortKey.modified;
+  bool sortAscending = false; // 預設：最近修改的在前
 
-  List<Notebook> get currentNotebooks =>
-      notebooks.where((n) => n.folderId == currentFolderId).toList();
+  void setViewMode(ShelfViewMode mode) {
+    if (viewMode == mode) return;
+    viewMode = mode;
+    notifyListeners();
+  }
+
+  void setSort({ShelfSortKey? key, bool? ascending}) {
+    final newKey = key ?? sortKey;
+    final newAsc = ascending ?? sortAscending;
+    if (newKey == sortKey && newAsc == sortAscending) return;
+    sortKey = newKey;
+    sortAscending = newAsc;
+    notifyListeners();
+  }
+
+  /// 點擊清單欄位標題：同一欄 → 反轉方向；換欄 → 名稱預設升序、時間預設降序
+  void toggleSortByColumn(ShelfSortKey key) {
+    if (sortKey == key) {
+      sortAscending = !sortAscending;
+    } else {
+      sortKey = key;
+      sortAscending = key == ShelfSortKey.name;
+    }
+    notifyListeners();
+  }
+
+  int _compare(String nameA, DateTime timeA, String idA, String nameB,
+      DateTime timeB, String idB) {
+    int c = sortKey == ShelfSortKey.name
+        ? nameA.toLowerCase().compareTo(nameB.toLowerCase())
+        : timeA.compareTo(timeB);
+    if (c == 0) c = nameA.toLowerCase().compareTo(nameB.toLowerCase());
+    if (c == 0) c = idA.compareTo(idB);
+    return sortAscending ? c : -c;
+  }
+
+  // 取得當前目錄下的資料夾與筆記本 (已依目前排序設定排序；資料夾永遠在筆記本前面)
+  List<NoteFolder> get currentFolders {
+    final list = folders.where((f) => f.parentFolderId == currentFolderId).toList();
+    list.sort((a, b) => _compare(a.name, a.updatedAt, a.id, b.name, b.updatedAt, b.id));
+    return list;
+  }
+
+  List<Notebook> get currentNotebooks {
+    final list = notebooks.where((n) => n.folderId == currentFolderId).toList();
+    list.sort((a, b) => _compare(a.title, a.updatedAt, a.id, b.title, b.updatedAt, b.id));
+    return list;
+  }
 
   /// 找不到時回傳 null (原本 firstWhere 會直接丟 StateError)
   NoteFolder? get currentFolder =>
@@ -133,14 +183,22 @@ class ShelfController extends ChangeNotifier {
       parentFolderId: currentFolderId,
     );
     folders.insert(0, newFolder);
+    _touchFolder(currentFolderId); // 父資料夾內容有異動
     await _persist();
     notifyListeners();
+  }
+
+  void _touchFolder(String? id) {
+    if (id == null) return;
+    final f = _folderById(id);
+    if (f != null) f.updatedAt = DateTime.now();
   }
 
   Future<void> renameFolder(String id, String newName) async {
     final idx = folders.indexWhere((f) => f.id == id);
     if (idx != -1 && newName.trim().isNotEmpty) {
       folders[idx].name = newName.trim();
+      folders[idx].updatedAt = DateTime.now();
       await _persist();
       notifyListeners();
     }
@@ -218,6 +276,51 @@ class ShelfController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ------------------------------------------
+  // 拖曳搬移
+  // ------------------------------------------
+  /// 筆記本能否搬到 [targetFolderId] (null = 最外層)
+  bool canMoveNotebook(String id, String? targetFolderId) {
+    final nb = notebooks.where((n) => n.id == id).firstOrNull;
+    if (nb == null || nb.folderId == targetFolderId) return false;
+    if (targetFolderId != null && _folderById(targetFolderId) == null) return false;
+    return true;
+  }
+
+  /// 資料夾能否搬到 [targetParentId] (null = 最外層)。
+  /// 不能搬進自己或自己的子孫 (會形成循環)，也不用搬到原本所在位置。
+  bool canMoveFolder(String id, String? targetParentId) {
+    final f = _folderById(id);
+    if (f == null || f.parentFolderId == targetParentId) return false;
+    if (targetParentId == null) return true;
+    if (targetParentId == id) return false;
+    if (_folderById(targetParentId) == null) return false;
+    return !_descendantFolderIds(id).contains(targetParentId);
+  }
+
+  /// 搬移筆記本。不改變筆記本自己的修改時間，只更新相關資料夾的時間。
+  Future<bool> moveNotebook(String id, String? targetFolderId) async {
+    if (!canMoveNotebook(id, targetFolderId)) return false;
+    final nb = notebooks.firstWhere((n) => n.id == id);
+    _touchFolder(nb.folderId);
+    nb.folderId = targetFolderId;
+    _touchFolder(targetFolderId);
+    await _persist();
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> moveFolder(String id, String? targetParentId) async {
+    if (!canMoveFolder(id, targetParentId)) return false;
+    final f = _folderById(id)!;
+    _touchFolder(f.parentFolderId);
+    f.parentFolderId = targetParentId;
+    _touchFolder(targetParentId);
+    await _persist();
+    notifyListeners();
+    return true;
+  }
+
   void enterFolder(String folderId) {
     currentFolderId = folderId;
     notifyListeners();
@@ -253,6 +356,7 @@ class ShelfController extends ChangeNotifier {
       folderId: currentFolderId,
     );
     notebooks.insert(0, newBook);
+    _touchFolder(currentFolderId);
     await _persist();
     notifyListeners();
   }

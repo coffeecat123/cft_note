@@ -13,23 +13,35 @@ import '../../../../core/engine/tile_planner.dart';
 import '../../../document/domain/note_page.dart';
 import '../../../pdf_import_export/services/pdf_service.dart';
 
+/// 高清圖塊要服務的頁面，以及該頁左上角在畫布 (scene) 座標中的位置
+class PageFocus {
+  final NotePage page;
+  final Offset origin;
+  const PageFocus(this.page, this.origin);
+}
+
 class PageImageManager {
   PageImageManager({
     required Matrix4 Function() transform,
     required Size Function() viewportSize,
     required double Function() zoom, // 1.0 = 100%
+    required PageFocus? Function() focus,
     required VoidCallback onChanged,
   }) : _transform = transform,
        _viewportSize = viewportSize,
        _zoom = zoom,
+       _focus = focus,
        _onChanged = onChanged;
 
   final Matrix4 Function() _transform;
   final Size Function() _viewportSize;
   final double Function() _zoom;
+  final PageFocus? Function() _focus;
   final VoidCallback _onChanged;
 
   NotePage? _shown; // 目前顯示中的頁面
+  Set<NotePage> _visible = {}; // 連續捲動模式下，可視範圍內需要底圖的頁面
+  NotePage? _detailOwner; // 目前持有高清圖塊的頁面
   final Set<NotePage> _loadingBase = {}; // 正在載入底圖的頁面 (去重)
   bool _busy = false; // 圖塊渲染中
   bool _pending = false; // 渲染中又有新縮放 → 結束後再檢查一次
@@ -48,9 +60,29 @@ class PageImageManager {
   /// 切換到 [page]：同步釋放前一頁的圖 (PDF 頁面之後可按需重新渲染)
   void setShown(NotePage page) {
     final prev = _shown;
-    if (prev != null && prev != page) _release(prev);
+    if (prev != null && prev != page && !_visible.contains(prev)) {
+      _release(prev);
+    }
     _shown = page;
   }
+
+  /// 連續捲動模式：宣告目前可視 (含預載邊界) 的頁面。
+  /// 新進入的頁面按需載入底圖；離開的頁面釋放圖片。
+  /// 單頁模式請傳入空集合。
+  void setVisible(Iterable<NotePage> pages) {
+    final next = pages.toSet();
+    if (next.length == _visible.length && next.containsAll(_visible)) return;
+    final old = _visible;
+    _visible = next;
+    for (final p in old) {
+      if (!next.contains(p) && p != _shown) _release(p);
+    }
+    for (final p in next) {
+      unawaited(loadBase(p));
+    }
+  }
+
+  bool _wanted(NotePage page) => page == _shown || _visible.contains(page);
 
   /// 按需載入底圖。_loadingBase 去重：A→B→A 快速切換不會同時渲染兩次。
   Future<void> loadBase(NotePage page) async {
@@ -67,7 +99,7 @@ class PageImageManager {
         baseScale(page),
       );
       if (image == null) return;
-      if (_disposed || _shown != page || page.cachedBackgroundImage != null) {
+      if (_disposed || !_wanted(page) || page.cachedBackgroundImage != null) {
         image.dispose(); // 等待期間已切走 / 已被別處載入，這張沒人要了
       } else {
         page.cachedBackgroundImage = image;
@@ -86,6 +118,10 @@ class PageImageManager {
     _disposed = true;
     final page = _shown;
     if (page != null) _release(page);
+    for (final p in _visible) {
+      _release(p);
+    }
+    _visible = {};
     _shown = null;
   }
 
@@ -94,13 +130,13 @@ class PageImageManager {
   // ------------------------------------------------------------
 
   /// 螢幕可視範圍對應到頁面座標、並裁在紙張內
-  Rect? _visiblePageRect(NotePage page) {
+  Rect? _visiblePageRect(NotePage page, Offset origin) {
     final viewport = _viewportSize();
     if (viewport.isEmpty) return null;
     final Rect scene = MatrixUtils.inverseTransformRect(
       _transform(),
       Offset.zero & viewport,
-    );
+    ).shift(-origin); // 換算成該頁自己的座標
     final Rect v = scene.intersect(Rect.fromLTWH(0, 0, page.width, page.height));
     if (v.width <= 0 || v.height <= 0) return null;
     return v;
@@ -137,12 +173,22 @@ class PageImageManager {
       _pending = true;
       return;
     }
-    final page = _shown;
-    if (page == null || page.pdfFilePath == null || page.pdfPageNumber == null) {
+    final focus = _focus();
+    if (focus == null) return;
+    final page = focus.page;
+
+    // 焦點換到別頁 → 舊頁的高清圖塊不再需要
+    final prevOwner = _detailOwner;
+    if (prevOwner != null && prevOwner != page && _clearDetail(prevOwner)) {
+      _onChanged();
+    }
+    _detailOwner = page;
+
+    if (page.pdfFilePath == null || page.pdfPageNumber == null) {
       return;
     }
 
-    final visible = _visiblePageRect(page);
+    final visible = _visiblePageRect(page, focus.origin);
     if (visible == null) return;
     final plan = TilePlanner.plan(
       pageW: page.width,
@@ -188,7 +234,7 @@ class PageImageManager {
         Rect.fromLTRB(plan.left, plan.top, plan.right, plan.bottom),
       );
       if (tile == null) return;
-      if (_disposed || _shown != page) {
+      if (_disposed || _focus()?.page != page) {
         tile.image.dispose(); // 等待期間已換頁/離開
         return;
       }

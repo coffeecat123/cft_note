@@ -79,28 +79,7 @@ class FolderCard extends StatelessWidget {
                   if (val == 'rename') onRename();
                   if (val == 'delete') onDelete();
                 },
-                itemBuilder: (ctx) => [
-                  const PopupMenuItem(
-                    value: 'rename',
-                    child: Row(
-                      children: [
-                        Icon(Icons.edit_outlined, size: 18),
-                        SizedBox(width: 8),
-                        Text('重新命名', style: TextStyle(fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'delete',
-                    child: Row(
-                      children: [
-                        Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
-                        SizedBox(width: 8),
-                        Text('刪除資料夾', style: TextStyle(fontSize: 13, color: Colors.redAccent)),
-                      ],
-                    ),
-                  ),
-                ],
+                itemBuilder: (ctx) => menuItems(),
               ),
             ],
           ),
@@ -108,4 +87,28 @@ class FolderCard extends StatelessWidget {
       ),
     );
   }
+
+  /// 選單項目 (清單模式的列也共用)
+  static List<PopupMenuEntry<String>> menuItems() => [
+          const PopupMenuItem(
+            value: 'rename',
+            child: Row(
+              children: [
+                Icon(Icons.edit_outlined, size: 18),
+                SizedBox(width: 8),
+                Text('重新命名', style: TextStyle(fontSize: 13)),
+              ],
+            ),
+          ),
+          const PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                SizedBox(width: 8),
+                Text('刪除資料夾', style: TextStyle(fontSize: 13, color: Colors.redAccent)),
+              ],
+            ),
+          ),
+  ];
 }

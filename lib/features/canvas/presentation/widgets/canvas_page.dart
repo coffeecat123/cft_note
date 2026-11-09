@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:cft_note/features/document/data/storage_service.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../../pdf_import_export/services/pdf_export_service.dart';
@@ -14,6 +15,7 @@ import '../toolbars/brush_settings_sheet.dart';
 import '../toolbars/color_settings_sheet.dart';
 import 'canvas_painters.dart';
 import 'page_list_dialog.dart';
+import '../../domain/models/page_layout_mode.dart';
 
 class CanvasPage extends StatefulWidget {
   final ShelfController shelfController;
@@ -191,38 +193,48 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                               final isActive =
                                   index == _controller.activeNotebookIndex;
 
-                              return Container(
+                              // ★ 整個標籤都是點擊範圍 (含空白處、內距)，不是只有文字那一小塊。
+                              //   × 是更內層的 InkWell，點它不會同時觸發切換。
+                              return GestureDetector(
                                 // ★ ReorderableList 的每個項目必須要有唯一的 Key！
                                 key: ValueKey(nb.id),
-                                margin: const EdgeInsets.only(top: 4, right: 4),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: isActive
-                                      ? Colors.white
-                                      : const Color(0xFFDFE3E6),
-                                  borderRadius: const BorderRadius.vertical(
-                                    top: Radius.circular(8),
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () {
+                                  _controller.switchTab(index);
+                                  widget.shelfController.activeTabIndex = index;
+                                },
+                                child: Container(
+                                  margin: const EdgeInsets.only(
+                                    top: 4,
+                                    right: 4,
                                   ),
-                                  border: isActive
-                                      ? Border.all(
-                                          color: Colors.black12,
-                                          width: 0.5,
-                                        )
-                                      : null,
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // 點擊切換標籤 (單擊切換，長按/拖動為排序)
-                                    GestureDetector(
-                                      onTap: () {
-                                        _controller.switchTab(index);
-                                        widget.shelfController.activeTabIndex =
-                                            index;
-                                      },
-                                      child: Row(
+                                  // 標籤最小寬度：標題很短時也不會縮成一小塊
+                                  constraints: const BoxConstraints(
+                                    minWidth: 100,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isActive
+                                        ? Colors.white
+                                        : const Color(0xFFDFE3E6),
+                                    borderRadius: const BorderRadius.vertical(
+                                      top: Radius.circular(8),
+                                    ),
+                                    border: isActive
+                                        ? Border.all(
+                                            color: Colors.black12,
+                                            width: 0.5,
+                                          )
+                                        : null,
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           const SizedBox(width: 6),
@@ -247,26 +259,26 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                           ),
                                         ],
                                       ),
-                                    ),
-                                    const SizedBox(width: 6),
+                                      const SizedBox(width: 6),
 
-                                    // 關閉標籤 (×)
-                                    InkWell(
-                                      borderRadius: BorderRadius.circular(10),
-                                      onTap: () =>
-                                          _controller.closeTab(index, () {
-                                            Navigator.of(context).pop();
-                                          }),
-                                      child: const Padding(
-                                        padding: EdgeInsets.all(2.0),
-                                        child: Icon(
-                                          Icons.close,
-                                          size: 14,
-                                          color: Colors.grey,
+                                      // 關閉標籤 (×)
+                                      InkWell(
+                                        borderRadius: BorderRadius.circular(10),
+                                        onTap: () =>
+                                            _controller.closeTab(index, () {
+                                              Navigator.of(context).pop();
+                                            }),
+                                        child: const Padding(
+                                          padding: EdgeInsets.all(6.0),
+                                          child: Icon(
+                                            Icons.close,
+                                            size: 14,
+                                            color: Colors.grey,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               );
                             },
@@ -477,6 +489,12 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                     e.localPosition,
                     e.pressure == 0 ? 0.5 : e.pressure,
                   ),
+                  onPointerSignal: (e) {
+                    // 滑鼠滾輪 / 觸控板：連續捲動模式下用來捲動頁面
+                    if (e is PointerScrollEvent) {
+                      _controller.onScroll(e.scrollDelta);
+                    }
+                  },
                   onPointerUp: (e) => _controller.onPointerUp(e.pointer),
                   onPointerCancel: (e) => _controller.onPointerUp(e.pointer),
                   child: Stack(
@@ -577,6 +595,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
   }
 
   Future<void> _showPageListDialog() async {
+    _controller.syncCurrentToFocus(); // 連續模式：以畫面上看到的頁面為準
     final selected = await PageListDialog.show(context, _controller);
     if (selected != null && mounted) {
       _controller.goToPage(selected);
@@ -594,9 +613,36 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           _exportPdf();
         } else if (value == 'delete_page') {
           _confirmDeleteCurrentPage();
+        } else if (value == 'layout') {
+          _showLayoutModeDialog();
         }
       },
       itemBuilder: (ctx) => [
+        PopupMenuItem<String>(
+          value: 'layout',
+          child: Row(
+            children: [
+              const Icon(
+                Icons.view_carousel_outlined,
+                size: 18,
+                color: Colors.blueAccent,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '頁面顯示方式',
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+              Text(
+                _controller.layoutMode.label,
+                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              ),
+              Icon(Icons.chevron_right, size: 18, color: Colors.grey[500]),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
         const PopupMenuItem<String>(
           value: 'export_pdf',
           child: Row(
@@ -637,6 +683,39 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     );
   }
 
+  /// 列出所有頁面顯示方式供切換
+  Future<void> _showLayoutModeDialog() async {
+    final current = _controller.layoutMode;
+    final selected = await showDialog<PageLayoutMode>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('頁面顯示方式', style: TextStyle(fontSize: 16)),
+        children: [
+          for (final mode in PageLayoutMode.values)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, mode),
+              child: Row(
+                children: [
+                  Icon(
+                    mode == current
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 20,
+                    color: mode == current ? Colors.blueAccent : Colors.grey,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(mode.label, style: const TextStyle(fontSize: 14)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selected != null && mounted) {
+      _controller.setLayoutMode(selected);
+    }
+  }
+
   Future<void> _exportPdf() async {
     final messenger = ScaffoldMessenger.of(context);
     _controller.saveCurrentPage();
@@ -656,6 +735,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
   }
 
   Future<void> _confirmDeleteCurrentPage() async {
+    _controller.syncCurrentToFocus(); // 連續模式：刪除畫面上看到的那一頁
     if (!_controller.canDeleteCurrentPage) return;
     final pageNumber = _controller.currentPageIndex + 1;
 
@@ -688,6 +768,15 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
   }
 
   Widget _buildPageNavPill(BuildContext context) {
+    // 連續模式捲動時只有 viewSignal 會觸發，所以頁碼要自己監聽
+    return ListenableBuilder(
+      listenable: _controller.viewSignal,
+      builder: (context, _) => _buildPageNavPillBody(),
+    );
+  }
+
+  Widget _buildPageNavPillBody() {
+    final idx = _controller.focusPageIndex; // 單頁模式 = 目前頁
     return Container(
       height: 32,
       padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -701,7 +790,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
         children: [
           InkWell(
             borderRadius: BorderRadius.circular(12),
-            onTap: _controller.currentPageIndex > 0
+            onTap: idx > 0
                 ? _controller.previousPage
                 : null,
             child: Padding(
@@ -709,7 +798,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
               child: Icon(
                 Icons.arrow_back_ios_new,
                 size: 13,
-                color: _controller.currentPageIndex > 0
+                color: idx > 0
                     ? Colors.black87
                     : Colors.grey[400],
               ),
@@ -717,7 +806,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           ),
           const SizedBox(width: 4),
           Text(
-            '${_controller.currentPageIndex + 1} / ${_controller.totalPages}',
+            '${idx + 1} / ${_controller.totalPages}',
             style: const TextStyle(
               fontWeight: FontWeight.w600,
               fontSize: 12,
@@ -727,7 +816,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           const SizedBox(width: 4),
           InkWell(
             borderRadius: BorderRadius.circular(12),
-            onTap: _controller.currentPageIndex < _controller.totalPages - 1
+            onTap: idx < _controller.totalPages - 1
                 ? _controller.nextPage
                 : null,
             child: Padding(
@@ -735,7 +824,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
               child: Icon(
                 Icons.arrow_forward_ios,
                 size: 13,
-                color: _controller.currentPageIndex < _controller.totalPages - 1
+                color: idx < _controller.totalPages - 1
                     ? Colors.black87
                     : Colors.grey[400],
               ),
