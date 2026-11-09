@@ -13,6 +13,7 @@ import '../controllers/canvas_controller.dart';
 import '../toolbars/brush_settings_sheet.dart';
 import '../toolbars/color_settings_sheet.dart';
 import 'canvas_painters.dart';
+import 'page_list_dialog.dart';
 
 class CanvasPage extends StatefulWidget {
   final ShelfController shelfController;
@@ -438,6 +439,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                 ),
                                 
                                 // ★ 更多選單：匯出 PDF / 刪除當前頁面
+                                _buildPageListButton(),
                                 _buildMoreMenu(),
                                 const SizedBox(width: 12),
                               ],
@@ -563,6 +565,22 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
         },
       ),
     );
+  }
+
+  /// 頁面清單按鈕：列出所有頁面，點選即跳轉
+  Widget _buildPageListButton() {
+    return IconButton(
+      icon: Icon(Icons.view_list_rounded, size: 20, color: Colors.grey[700]),
+      tooltip: '頁面列表',
+      onPressed: _showPageListDialog,
+    );
+  }
+
+  Future<void> _showPageListDialog() async {
+    final selected = await PageListDialog.show(context, _controller);
+    if (selected != null && mounted) {
+      _controller.goToPage(selected);
+    }
   }
 
   Widget _buildMoreMenu() {

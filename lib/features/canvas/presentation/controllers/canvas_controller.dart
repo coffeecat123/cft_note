@@ -401,6 +401,13 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  /// 直接跳到指定頁 (0-based)
+  void goToPage(int index) {
+    if (index < 0 || index >= pages.length || index == currentPageIndex) return;
+    _saveCurrentPageState();
+    _loadPageState(index);
+  }
+
   /// 至少要保留一頁
   bool get canDeleteCurrentPage => pages.length > 1;
 
