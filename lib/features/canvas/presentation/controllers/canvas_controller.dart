@@ -401,6 +401,20 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  /// 至少要保留一頁
+  bool get canDeleteCurrentPage => pages.length > 1;
+
+  /// 刪除目前頁面 (UI 端需先讓使用者確認)。
+  /// 刪除後顯示「接替它位置的那一頁」；若刪的是最後一頁則顯示前一頁。
+  void deleteCurrentPage() {
+    if (!canDeleteCurrentPage) return;
+    final removeIndex = currentPageIndex;
+    pages.removeAt(removeIndex);
+    _markDirty();
+    // _loadPageState 會釋放被刪頁面的底圖/圖塊 (images.setShown 會釋放前一個顯示的頁面)
+    _loadPageState(removeIndex.clamp(0, pages.length - 1));
+  }
+
   // 在此頁後面插入一頁空白頁
   void insertBlankPageAfterCurrent() {
     _saveCurrentPageState();

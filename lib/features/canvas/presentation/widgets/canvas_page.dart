@@ -311,26 +311,6 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                IconButton(
-                                  icon: const Icon(Icons.undo, size: 20),
-                                  tooltip: '復原',
-                                  onPressed: _controller.canUndo
-                                      ? _controller.undo
-                                      : null,
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.redo, size: 20),
-                                  tooltip: '重做',
-                                  onPressed: _controller.canRedo
-                                      ? _controller.redo
-                                      : null,
-                                ),
-                                const VerticalDivider(
-                                  width: 16,
-                                  indent: 14,
-                                  endIndent: 14,
-                                ),
-
                                 // 智慧筆刷按鈕 (未選中切換，已選中開啟工作室)
                                 IconButton(
                                   icon: Icon(
@@ -395,44 +375,6 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                       _controller.setTool(DrawingTool.lasso),
                                 ),
 
-                                // ★ 新增：匯出 PDF 按鈕
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.picture_as_pdf_outlined,
-                                    size: 20,
-                                    color: Colors.blueAccent,
-                                  ),
-                                  tooltip: '匯出為 PDF 文件',
-                                  onPressed: () async {
-                                    _controller.saveCurrentPage();
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('正在合成向量 PDF...'),
-                                        duration: Duration(seconds: 1),
-                                      ),
-                                    );
-
-                                    final success =
-                                        await PdfExportService.exportNotebook(
-                                          _controller.currentNotebook,
-                                        );
-                                    if (success && context.mounted) {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                            const SnackBar(
-                                              content: Text('PDF 匯出成功！'),
-                                            ),
-                                          );
-                                    }
-                                  },
-                                ),
-
-                                const VerticalDivider(
-                                  width: 16,
-                                  indent: 14,
-                                  endIndent: 14,
-                                ),
-
                                 // 色彩按鈕
                                 GestureDetector(
                                   onTap: () {
@@ -473,6 +415,30 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                     ),
                                   ),
                                 ),
+                                
+                                const VerticalDivider(
+                                  width: 16,
+                                  indent: 14,
+                                  endIndent: 14,
+                                ),
+
+                                IconButton(
+                                  icon: const Icon(Icons.undo, size: 20),
+                                  tooltip: '復原',
+                                  onPressed: _controller.canUndo
+                                      ? _controller.undo
+                                      : null,
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.redo, size: 20),
+                                  tooltip: '重做',
+                                  onPressed: _controller.canRedo
+                                      ? _controller.redo
+                                      : null,
+                                ),
+                                
+                                // ★ 更多選單：匯出 PDF / 刪除當前頁面
+                                _buildMoreMenu(),
                                 const SizedBox(width: 12),
                               ],
                             ),
@@ -597,6 +563,110 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
         },
       ),
     );
+  }
+
+  Widget _buildMoreMenu() {
+    final canDelete = _controller.canDeleteCurrentPage;
+    return PopupMenuButton<String>(
+      tooltip: '更多',
+      padding: EdgeInsets.zero,
+      icon: Icon(Icons.more_vert, size: 20, color: Colors.grey[700]),
+      onSelected: (value) {
+        if (value == 'export_pdf') {
+          _exportPdf();
+        } else if (value == 'delete_page') {
+          _confirmDeleteCurrentPage();
+        }
+      },
+      itemBuilder: (ctx) => [
+        const PopupMenuItem<String>(
+          value: 'export_pdf',
+          child: Row(
+            children: [
+              Icon(
+                Icons.picture_as_pdf_outlined,
+                size: 18,
+                color: Colors.blueAccent,
+              ),
+              SizedBox(width: 10),
+              Text('匯出為 PDF', style: TextStyle(fontSize: 13)),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<String>(
+          value: 'delete_page',
+          enabled: canDelete,
+          child: Row(
+            children: [
+              Icon(
+                Icons.delete_outline,
+                size: 18,
+                color: canDelete ? Colors.redAccent : Colors.grey,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                canDelete ? '刪除當前頁面' : '刪除當前頁面 (至少保留一頁)',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: canDelete ? Colors.redAccent : Colors.grey,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _exportPdf() async {
+    final messenger = ScaffoldMessenger.of(context);
+    _controller.saveCurrentPage();
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('正在合成向量 PDF...'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+
+    final success = await PdfExportService.exportNotebook(
+      _controller.currentNotebook,
+    );
+    if (success && mounted) {
+      messenger.showSnackBar(const SnackBar(content: Text('PDF 匯出成功！')));
+    }
+  }
+
+  Future<void> _confirmDeleteCurrentPage() async {
+    if (!_controller.canDeleteCurrentPage) return;
+    final pageNumber = _controller.currentPageIndex + 1;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('刪除當前頁面'),
+        content: Text('確定要刪除第 $pageNumber 頁嗎？頁面上的筆跡會一併刪除，無法復原。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('刪除'),
+          ),
+        ],
+      ),
+    );
+
+    // 對話框開啟期間頁面可能已改變 (例如自動存檔/切頁)，確認時再檢查一次
+    if (confirmed == true && mounted && _controller.canDeleteCurrentPage) {
+      _controller.deleteCurrentPage();
+    }
   }
 
   Widget _buildPageNavPill(BuildContext context) {
