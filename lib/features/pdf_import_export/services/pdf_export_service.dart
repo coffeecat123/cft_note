@@ -5,6 +5,7 @@ import 'dart:ui' show Offset, Size; // 使用原生 Offset 與 Size
 import 'package:file_picker/file_picker.dart';
 import 'package:perfect_freehand/perfect_freehand.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
+import '../../document/data/page_image_store.dart';
 import '../../shelf/domain/models/notebook.dart';
 
 class PdfExportService {
@@ -40,6 +41,15 @@ class PdfExportService {
 
           final PdfTemplate template = originalPage.createTemplate();
           graphics.drawPdfTemplate(template, const Offset(0, 0));
+        }
+
+        // ============================================================
+        // 1.5 使用者放上去的圖片 (在筆跡之下；超出紙張的部分 PDF 頁面本身就會裁掉)
+        // ============================================================
+        for (final img in page.images) {
+          final file = await PageImageStore.fileFor(img);
+          if (!await file.exists()) continue;
+          graphics.drawImage(PdfBitmap(await file.readAsBytes()), img.rect);
         }
 
         // ============================================================

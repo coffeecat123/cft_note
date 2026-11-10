@@ -7,6 +7,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../../pdf_import_export/services/image_export_service.dart';
+import '../../../pdf_import_export/services/image_pick_service.dart';
 import '../../../pdf_import_export/services/pdf_export_service.dart';
 import '../../../pdf_import_export/services/pdf_service.dart';
 import '../../../shelf/presentation/controllers/shelf_controller.dart';
@@ -391,6 +392,25 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                       _controller.setTool(DrawingTool.lasso),
                                 ),
 
+                                // 圖片模式：未選中 → 切換到圖片模式；已選中 → 選擇圖片來源
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.image_outlined,
+                                    color:
+                                        _controller.currentTool ==
+                                            DrawingTool.image
+                                        ? Colors.blue
+                                        : Colors.grey[700],
+                                    size: 20,
+                                  ),
+                                  tooltip:
+                                      _controller.currentTool ==
+                                          DrawingTool.image
+                                      ? '插入圖片'
+                                      : '圖片模式',
+                                  onPressed: _onImageButtonPressed,
+                                ),
+
                                 // 色彩按鈕
                                 GestureDetector(
                                   onTap: () {
@@ -530,6 +550,9 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                     onCopy: _controller.copySelection,
                     onDelete: _controller.deleteSelection,
                     onPaste: _controller.pasteFromClipboard,
+                    onPasteImage: _controller.pasteImageFromSystemClipboard,
+                    canPasteStrokes: _controller.lassoMenuCanPasteStrokes,
+                    canPasteImage: _controller.lassoMenuCanPasteImage,
                     onScreenshot: _screenshotSelection,
                   ),
                 ),
@@ -622,6 +645,58 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
       png: png,
       fileName: '${title}_截圖_$stamp.png',
     );
+  }
+
+  /// 圖片按鈕：不在圖片模式 → 先切過去；已在圖片模式 → 跳出 系統圖庫 / 系統檔案
+  void _onImageButtonPressed() {
+    if (_controller.currentTool != DrawingTool.image) {
+      _controller.setTool(DrawingTool.image);
+    } else {
+      _showImageSourceSheet();
+    }
+  }
+
+  Future<void> _showImageSourceSheet() async {
+    final source = await showModalBottomSheet<ImagePickSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('系統圖庫'),
+              onTap: () => Navigator.pop(ctx, ImagePickSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_open_outlined),
+              title: const Text('系統檔案'),
+              onTap: () => Navigator.pop(ctx, ImagePickSource.files),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (source != null && mounted) await _pickAndInsertImage(source);
+  }
+
+  /// 挑圖 → 放進目前頁面並選取 (之後可直接平移 / 縮放 / 刪除)
+  Future<void> _pickAndInsertImage(ImagePickSource source) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await ImagePickService.pick(source);
+      if (bytes == null || !mounted) return; // 使用者取消
+      final ok = await _controller.addImageFromBytes(bytes);
+      if (!ok && mounted) {
+        messenger.showSnackBar(const SnackBar(content: Text('無法載入這張圖片')));
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text('選取圖片失敗：$e')));
+      }
+    }
   }
 
   /// 頁面清單按鈕：列出所有頁面，點選即跳轉

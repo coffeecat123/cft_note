@@ -205,6 +205,11 @@ class PageImageManager {
 
   void _release(NotePage page) {
     _clearDetail(page);
+    // 使用者放上去的圖片：解碼後的 ui.Image 可以隨時從檔案重新載入
+    for (final img in page.images) {
+      _disposeImageLater(img.image);
+      img.image = null;
+    }
     if (page.pdfFilePath != null) {
       // 只釋放能從 PDF 重新渲染的底圖
       _disposeImageLater(page.cachedBackgroundImage);

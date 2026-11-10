@@ -17,12 +17,19 @@ import '../../domain/models/stroke.dart';
 import '../../domain/commands/canvas_command.dart';
 import '../../domain/models/page_layout_mode.dart';
 import '../../domain/models/tools.dart';
+import '../../../document/data/page_image_store.dart';
+import '../../../pdf_import_export/services/clipboard_image_service.dart';
 import '../../../document/domain/note_page.dart';
+import '../../../document/domain/page_image.dart';
 import 'page_image_manager.dart';
 import 'region_capture.dart';
 
+/// 圖片模式下，一次手指按下後正在做的操作
+enum _ImageOp { none, move, resize, delete }
+
 // 2. 主畫布控制器 (CanvasController)
 class CanvasController extends ChangeNotifier {
+  bool _disposed = false;
   final List<Stroke> _historyStrokes = [];
   final List<CanvasCommand> _undoStack = [];
   final List<CanvasCommand> _redoStack = [];
@@ -354,6 +361,7 @@ class CanvasController extends ChangeNotifier {
   final List<Offset> _currentLassoDrawing = [];
   final List<Offset> _selectedLassoPolygon = [];
   final List<Stroke> _selectedStrokes = [];
+  final List<PageImage> _selectedImages = []; // 套索一起圈到的圖片
   bool _isDraggingSelection = false;
   Offset _lastDragPosition = Offset.zero;
   Offset _totalDragDelta = Offset.zero;
@@ -370,17 +378,21 @@ class CanvasController extends ChangeNotifier {
   bool _selectionDragStarted = false;
   LassoMenuKind lassoMenu = LassoMenuKind.none;
   Offset lassoMenuAnchor = Offset.zero; // 螢幕座標 (選單出現位置)
+  bool lassoMenuCanPasteStrokes = false; // 貼上選單：套索剪貼簿有筆劃
+  bool lassoMenuCanPasteImage = false; // 貼上選單：系統剪貼簿有圖片
   Offset _pasteScenePoint = Offset.zero;
 
   /// 套索剪貼簿 (static：換頁、換筆記本都還在；只存在記憶體)
   static List<Stroke> _clipboard = [];
-  bool get hasClipboard => _clipboard.isNotEmpty;
+  static List<PageImage> _clipboardImages = [];
+  bool get hasClipboard => _clipboard.isNotEmpty || _clipboardImages.isNotEmpty;
 
   List<PointVector> get currentPoints => _currentPoints;
   List<Stroke> get historyStrokes => _historyStrokes;
   List<Offset> get currentLassoDrawing => _currentLassoDrawing;
   List<Offset> get selectedLassoPolygon => _selectedLassoPolygon;
   List<Stroke> get selectedStrokes => _selectedStrokes;
+  List<PageImage> get selectedImages => _selectedImages;
   bool get canUndo => _undoStack.isNotEmpty;
   bool get canRedo => _redoStack.isNotEmpty;
   // ==========================================
@@ -595,6 +607,7 @@ class CanvasController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     images.dispose();
     _saveCurrentPageState(); // ★ 核心修復：退出畫布時，立即把筆跡存回當前頁面！
     _zoomIndicatorTimer?.cancel();
@@ -788,12 +801,18 @@ class CanvasController extends ChangeNotifier {
 
   void clearSelection() {
     _selectedStrokes.clear();
+    _selectedImages.clear();
     _selectedLassoPolygon.clear();
     _currentLassoDrawing.clear();
     _isDraggingSelection = false;
     _selectionDragStarted = false;
     _isPotentialNewLasso = false;
     lassoMenu = LassoMenuKind.none;
+    _selectedImage = null; // 圖片模式的選取也一併清掉
+    _imageOp = _ImageOp.none;
+    _imageStartRect = null;
+    _imageCandidate = null;
+    _imageDeselectPending = false;
   }
 
   // 1. 開始調色：手指按下滑桿瞬間呼叫 (記錄初始快照)
@@ -921,6 +940,305 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
+  // ==========================================
+  // ★ 圖片模式
+  //   點圖片 → 選取 (長方形外框)；框內拖曳 = 平移；右下角 = 等比縮放；右上角 = 刪除。
+  //   所有座標都是「目前編輯頁」的頁面座標；握把大小以螢幕像素為準 (隨縮放換算)。
+  // ==========================================
+  static const double imageHandleHitScreen = 24.0; // 握把可點擊半徑 (螢幕 px)
+  static const double imageHandleDrawScreen = 12.0; // 握把繪製半徑 (螢幕 px)
+  static const double _imageMinSide = 10.0; // 圖片短邊最小值 (頁面單位)
+  static const double _imageKeepVisible = 5.0; // 拖動時至少要留在紙張內的長寬 (頁面單位)
+
+  PageImage? _selectedImage;
+  _ImageOp _imageOp = _ImageOp.none;
+  Rect? _imageStartRect;
+  Offset _imageDownScene = Offset.zero;
+  Offset _imageLastScene = Offset.zero;
+  Offset _imageGrab = Offset.zero; // 縮放時手指離右下角的偏移 (避免一按下就跳動)
+  bool _imageDragStarted = false;
+  // 按在「尚未選取」的圖片上：等手指放開 / 拖動才真正選取 (雙指縮放時不會換掉選取)
+  PageImage? _imageCandidate;
+  // 按在空白處：等手指放開才取消選取 (雙指縮放時不會被取消)
+  bool _imageDeselectPending = false;
+
+  bool get isImageMode => currentTool == DrawingTool.image;
+
+  /// 目前選取的圖片 (已不在頁面上則視為沒有)
+  PageImage? get selectedImage {
+    final s = _selectedImage;
+    return (s != null && currentPage.images.contains(s)) ? s : null;
+  }
+
+  double get _imageHitRadius => imageHandleHitScreen / (zoomPercentage / 100);
+
+  _ImageOp _imageOpAt(PageImage img, Offset p) {
+    final hr = _imageHitRadius;
+    final r = img.rect;
+    if ((p - r.topRight).distance <= hr) return _ImageOp.delete;
+    if ((p - r.bottomRight).distance <= hr) return _ImageOp.resize;
+    if (r.contains(p)) return _ImageOp.move;
+    return _ImageOp.none;
+  }
+
+  /// 螢幕上的這一點是否落在「已選取圖片」的框或握把上
+  bool _pointerHitsSelectedImage(Offset screenPoint) {
+    if (!isImageMode) return false;
+    final sel = selectedImage;
+    if (sel == null) return false;
+    return _imageOpAt(sel, toScene(screenPoint)) != _ImageOp.none;
+  }
+
+  /// 圖片可以拖出紙張邊緣，只要求至少還有一小塊 ([_imageKeepVisible]) 留在紙張內，
+  /// 這樣一定抓得回來。
+  Rect _clampImageRect(Rect r) {
+    final pw = currentPage.width, ph = currentPage.height;
+    final keepX = min(_imageKeepVisible, r.width);
+    final keepY = min(_imageKeepVisible, r.height);
+    double dx = 0, dy = 0;
+    if (r.right < keepX) {
+      dx = keepX - r.right;
+    } else if (r.left > pw - keepX) {
+      dx = pw - keepX - r.left;
+    }
+    if (r.bottom < keepY) {
+      dy = keepY - r.bottom;
+    } else if (r.top > ph - keepY) {
+      dy = ph - keepY - r.top;
+    }
+    return r.shift(Offset(dx, dy));
+  }
+
+  void _imageDown(Offset p) {
+    _imageOp = _ImageOp.none;
+    _imageDragStarted = false;
+    _imageCandidate = null;
+    _imageDeselectPending = false;
+    _imageDownScene = p;
+    _imageLastScene = p;
+
+    PageImage? target;
+    _ImageOp op = _ImageOp.none;
+
+    // 已選取的圖片優先 (它的握把可能超出圖片範圍)：立刻開始操作
+    final sel = selectedImage;
+    if (sel != null) {
+      op = _imageOpAt(sel, p);
+      if (op != _ImageOp.none) target = sel;
+    }
+    if (target != null) {
+      _imageOp = op;
+      _imageStartRect = target.rect;
+      _imageGrab = p - target.rect.bottomRight;
+      viewSignal.fire();
+      return;
+    }
+
+    // 否則找最上面那張被點到的圖片 → 先當候選；放開 / 拖動才真正選取
+    final list = currentPage.images;
+    for (int i = list.length - 1; i >= 0; i--) {
+      if (list[i].rect.contains(p)) {
+        _imageCandidate = list[i];
+        _imageOp = _ImageOp.move;
+        _imageStartRect = list[i].rect;
+        return;
+      }
+    }
+    // 空白處：放開才取消選取 (可能是雙指縮放的第一根手指)
+    _imageDeselectPending = selectedImage != null;
+  }
+
+  void _imageMove(Offset p) {
+    _imageLastScene = p;
+    final double movedPx = (p - _imageDownScene).distance * (zoomPercentage / 100);
+
+    if (_imageDeselectPending) {
+      if (movedPx >= _tapSlop) _imageDeselectPending = false; // 拖動 = 不是點一下
+      return;
+    }
+    final candidate = _imageCandidate;
+    if (candidate != null) {
+      if (movedPx < _tapSlop) return;
+      _selectedImage = candidate; // 拖動開始才選取並移動
+      _imageCandidate = null;
+      _imageDragStarted = true;
+    }
+
+    final img = _selectedImage;
+    final start = _imageStartRect;
+    if (img == null || start == null) return;
+
+    switch (_imageOp) {
+      case _ImageOp.move:
+        // 點一下選取時手指會微動，超過容許範圍才算拖曳
+        if (!_imageDragStarted) {
+          final moved = (p - _imageDownScene).distance * (zoomPercentage / 100);
+          if (moved < _tapSlop) return;
+          _imageDragStarted = true;
+        }
+        img.rect = _clampImageRect(start.shift(p - _imageDownScene));
+        break;
+      case _ImageOp.resize:
+        // 左上角固定、等比縮放：寬度取「水平 / 垂直方向要求」較大者
+        final aspect = start.width / start.height;
+        final target = p - _imageGrab;
+        double w = max(target.dx - start.left, (target.dy - start.top) * aspect);
+        final minW = aspect >= 1 ? _imageMinSide * aspect : _imageMinSide;
+        final maxW = max(currentPage.width, currentPage.height) * 4;
+        w = w.clamp(minW, max(minW, maxW)).toDouble();
+        img.rect = Rect.fromLTWH(start.left, start.top, w, w / aspect);
+        break;
+      case _ImageOp.delete:
+      case _ImageOp.none:
+        return;
+    }
+    viewSignal.fire();
+  }
+
+  void _imageUp() {
+    final candidate = _imageCandidate;
+    final deselect = _imageDeselectPending;
+    _imageCandidate = null;
+    _imageDeselectPending = false;
+    if (candidate != null) {
+      _imageOp = _ImageOp.none;
+      _imageStartRect = null;
+      _selectedImage = candidate; // 點一下 = 選取
+      viewSignal.fire();
+      return;
+    }
+    if (deselect) {
+      _selectedImage = null; // 點空白處 = 取消選取
+      viewSignal.fire();
+      return;
+    }
+
+    final img = _selectedImage;
+    final start = _imageStartRect;
+    final op = _imageOp;
+    _imageOp = _ImageOp.none;
+    _imageStartRect = null;
+    _imageDragStarted = false;
+    if (img == null || start == null || op == _ImageOp.none) return;
+
+    if (op == _ImageOp.delete) {
+      // 手指放開時還在刪除握把上才算「按下刪除」
+      if ((_imageLastScene - img.rect.topRight).distance <= _imageHitRadius) {
+        _deleteImage(img);
+      }
+      return;
+    }
+    if (img.rect != start) {
+      _undoStack.add(TransformImageCommand(img, start, img.rect));
+      _redoStack.clear();
+      _markDirty();
+    }
+  }
+
+  /// 第二根手指落下 (雙指縮放 / 平移畫面)：不打斷圖片編輯。
+  /// 已經做出的平移 / 縮放就地確定 (可復原)，選取狀態原封不動，縮放完還能繼續編輯。
+  void _suspendImageOp() {
+    final img = _selectedImage;
+    final start = _imageStartRect;
+    final op = _imageOp;
+    if (_imageCandidate == null &&
+        img != null &&
+        start != null &&
+        (op == _ImageOp.move || op == _ImageOp.resize) &&
+        img.rect != start) {
+      _undoStack.add(TransformImageCommand(img, start, img.rect));
+      _redoStack.clear();
+      _markDirty();
+    }
+    _imageOp = _ImageOp.none;
+    _imageStartRect = null;
+    _imageDragStarted = false;
+    _imageCandidate = null;
+    _imageDeselectPending = false;
+  }
+
+  void _deleteImage(PageImage img) {
+    final list = currentPage.images;
+    final i = list.indexOf(img);
+    if (i == -1) return;
+    list.removeAt(i);
+    _undoStack.add(RemoveImageCommand(list, img, i));
+    _redoStack.clear();
+    _selectedImage = null;
+    _markDirty();
+    _showHudMessage('已刪除圖片', icon: Icons.delete_outline);
+  }
+
+  /// 繪製時發現圖片還沒解碼 → 背景載入，完成後只重繪畫布
+  void requestImage(PageImage img) {
+    if (img.image != null || img.loading || img.missing) return;
+    unawaited(
+      PageImageStore.ensureLoaded(img).then((_) {
+        if (!_disposed) viewSignal.fire();
+      }),
+    );
+  }
+
+  /// 加入使用者挑選的圖片：放在目前畫面可見範圍的中央、選取它，進入可編輯狀態。
+  /// 圖片無法解碼時回傳 false。
+  /// [at] (目前頁的頁面座標) 有給就以該點為中心 (貼上用)，也不再切換頁面。
+  Future<bool> addImageFromBytes(Uint8List bytes, {Offset? at}) async {
+    if (at == null) syncCurrentToFocus(); // 連續模式：加到畫面上看到的那一頁
+    final page = currentPage;
+
+    final imported = await PageImageStore.importBytes(bytes);
+    if (imported == null) return false;
+    if (_disposed || !pages.contains(page)) {
+      imported.image.dispose(); // 等待期間頁面已被刪掉 / 控制器已銷毀
+      return false;
+    }
+
+    final isCurrent = identical(page, currentPage);
+    final pageRect = Rect.fromLTWH(0, 0, page.width, page.height);
+    final iw = imported.image.width.toDouble();
+    final ih = imported.image.height.toDouble();
+    // 最大佔紙張 60%，不放大小圖
+    final s = min(1.0, min(page.width * 0.6 / iw, page.height * 0.6 / ih));
+    final w = iw * s, h = ih * s;
+
+    Offset center = at ?? pageRect.center;
+    if (at == null && isCurrent && !viewportSize.isEmpty) {
+      final vis = viewSceneRect.shift(-currentPageOrigin).intersect(pageRect);
+      if (vis.width > 0 && vis.height > 0) center = vis.center;
+    }
+    var rect = Rect.fromCenter(center: center, width: w, height: h);
+    double dx = 0, dy = 0;
+    if (rect.left < 0) {
+      dx = -rect.left;
+    } else if (rect.right > page.width) {
+      dx = page.width - rect.right;
+    }
+    if (rect.top < 0) {
+      dy = -rect.top;
+    } else if (rect.bottom > page.height) {
+      dy = page.height - rect.bottom;
+    }
+    rect = rect.shift(Offset(dx, dy));
+
+    final img = PageImage(
+      id: PageImageStore.newId(),
+      fileName: imported.fileName,
+      rect: rect,
+      image: imported.image,
+    );
+    page.images.add(img);
+    (isCurrent ? _undoStack : page.undoStack).add(AddImageCommand(page.images, img));
+    (isCurrent ? _redoStack : page.redoStack).clear();
+    _markDirty();
+
+    if (isCurrent) {
+      setTool(DrawingTool.image); // 會清掉舊選取，所以選取要放後面
+      _selectedImage = img;
+    }
+    notifyListeners();
+    return true;
+  }
+
   // 1. 手指落下
   void onPointerDown(int pointerId, Offset position, double pressure) {
     _pointerPositions[pointerId] = position;
@@ -932,6 +1250,7 @@ class CanvasController extends ChangeNotifier {
       _isPotentialNewLasso = false;
       _lassoLongPressTimer?.cancel();
       lassoMenu = LassoMenuKind.none; // 縮放 / 平移時選單位置會失準，直接收起
+      _suspendImageOp();
       eraserPosition = null;
       _lastEraseScenePoint = null;
 
@@ -966,7 +1285,10 @@ class CanvasController extends ChangeNotifier {
       _previousDistance = (points[0] - points[1]).distance;
       _previousMidpoint = (points[0] + points[1]) / 2;
     } else if (!_isScalingLocked && _pointerPositions.length == 1) {
-      if (isContinuous) _activatePageAt(position);
+      // 圖片模式：點在已選取圖片的框 / 握把上 (可能超出紙張) 時不要切換頁面
+      if (isContinuous && !_pointerHitsSelectedImage(position)) {
+        _activatePageAt(position);
+      }
       final scenePoint = toScene(position);
 
       if (currentTool == DrawingTool.pen) {
@@ -994,6 +1316,8 @@ class CanvasController extends ChangeNotifier {
           _potentialLassoStart = scenePoint;
           _startLassoLongPress();
         }
+      } else if (currentTool == DrawingTool.image) {
+        _imageDown(scenePoint);
       }
     }
     notifyListeners();
@@ -1044,10 +1368,13 @@ class CanvasController extends ChangeNotifier {
               );
             }
           }
+          for (final img in _selectedImages) {
+            img.rect = img.rect.shift(delta);
+          }
           for (int i = 0; i < _selectedLassoPolygon.length; i++) {
             _selectedLassoPolygon[i] = _selectedLassoPolygon[i] + delta;
           }
-          _bakeHistoryToPicture();
+          if (_selectedStrokes.isNotEmpty) _bakeHistoryToPicture();
         } else if (_isPotentialNewLasso) {
           // 手指在容許範圍內微動仍算「按住」，才能觸發長按貼上
           if ((position - _lassoDownScreen).distance < _tapSlop) return;
@@ -1059,6 +1386,9 @@ class CanvasController extends ChangeNotifier {
         } else if (_currentLassoDrawing.isNotEmpty) {
           _currentLassoDrawing.add(scenePoint);
         }
+      } else if (currentTool == DrawingTool.image) {
+        _imageMove(scenePoint); // 只重繪畫布，不重建整頁
+        return;
       }
     } else if (_pointerPositions.length >= 2) {
       // HUD 尚未顯示、或正顯示文字訊息時才需要整頁重建；其餘只要重繪畫布
@@ -1177,7 +1507,9 @@ class CanvasController extends ChangeNotifier {
     _pointerPositions.remove(pointerId);
 
     if (!_isScalingLocked) {
-      if (currentTool == DrawingTool.pen && _currentPoints.isNotEmpty) {
+      if (currentTool == DrawingTool.image) {
+        _imageUp();
+      } else if (currentTool == DrawingTool.pen && _currentPoints.isNotEmpty) {
         final stroke = Stroke(
           points: List.from(_currentPoints),
           color: strokeColor,
@@ -1209,16 +1541,23 @@ class CanvasController extends ChangeNotifier {
       } else if (currentTool == DrawingTool.lasso) {
         if (_isDraggingSelection) {
           if (_selectionDragStarted) {
-            if (_totalDragDelta != Offset.zero) {
-              _undoStack.add(
-                MoveStrokesCommand(List.from(_selectedStrokes), _totalDragDelta),
-              );
+            if (_totalDragDelta != Offset.zero && _hasSelectedContent) {
+              final cmds = <CanvasCommand>[
+                if (_selectedStrokes.isNotEmpty)
+                  MoveStrokesCommand(List.from(_selectedStrokes), _totalDragDelta),
+                if (_selectedImages.isNotEmpty)
+                  MoveImagesCommand(List.from(_selectedImages), _totalDragDelta),
+              ];
+              _undoStack.add(cmds.length == 1 ? cmds.first : CompositeCommand(cmds));
               _redoStack.clear();
               _markDirty();
             }
           } else {
-            // 在圈選範圍內「點一下」→ 顯示 剪下 / 複製 / 刪除 / 截圖
-            lassoMenu = LassoMenuKind.selection;
+            // 在圈選範圍內「點一下」→ 顯示 剪下 / 複製 / 刪除 / 截圖；
+            // 圈到的範圍內什麼都沒有時 (只當截圖框) 就只有「截圖」
+            lassoMenu = _hasSelectedContent
+                ? LassoMenuKind.selection
+                : LassoMenuKind.region;
             lassoMenuAnchor = _lassoDownScreen;
           }
           _isDraggingSelection = false;
@@ -1273,21 +1612,48 @@ class CanvasController extends ChangeNotifier {
   /// 套索工具在空白處按住：剪貼簿有內容時，時間到就浮出「貼上」
   void _startLassoLongPress() {
     _lassoLongPressTimer?.cancel();
-    if (!hasClipboard) return;
-    _lassoLongPressTimer = Timer(_longPressDelay, () {
-      if (!_isPotentialNewLasso ||
-          currentTool != DrawingTool.lasso ||
-          _pointerPositions.length != 1 ||
-          !isInsidePage(_potentialLassoStart)) {
-        return;
-      }
+    bool stillHolding() =>
+        !_disposed &&
+        _isPotentialNewLasso &&
+        currentTool == DrawingTool.lasso &&
+        _pointerPositions.length == 1 &&
+        isInsidePage(_potentialLassoStart);
+
+    _lassoLongPressTimer = Timer(_longPressDelay, () async {
+      if (!stillHolding()) return;
+      // 套索剪貼簿有筆劃，或系統剪貼簿有圖片 → 才浮出「貼上」
+      final point = _potentialLassoStart;
+      final screen = _lassoDownScreen;
+      final hasImage = await ClipboardImageService.hasImage();
+      if (!stillHolding()) return; // 讀剪貼簿期間手指已離開 / 移動
+      if (!hasClipboard && !hasImage) return;
       clearSelection();
       lassoMenu = LassoMenuKind.paste;
-      lassoMenuAnchor = _lassoDownScreen;
-      _pasteScenePoint = _potentialLassoStart;
+      lassoMenuAnchor = screen;
+      lassoMenuCanPasteStrokes = hasClipboard;
+      lassoMenuCanPasteImage = hasImage;
+      _pasteScenePoint = point;
       HapticFeedback.selectionClick();
       notifyListeners();
     });
+  }
+
+  /// 把系統剪貼簿的圖片貼到長按的位置，並進入圖片編輯 (選取、可平移 / 縮放 / 刪除)
+  Future<void> pasteImageFromSystemClipboard() async {
+    final at = _pasteScenePoint;
+    lassoMenu = LassoMenuKind.none;
+    notifyListeners();
+
+    final bytes = await ClipboardImageService.readImage();
+    if (_disposed) return;
+    if (bytes == null) {
+      _showHudMessage('剪貼簿沒有圖片', icon: Icons.image_not_supported_outlined);
+      return;
+    }
+    final ok = await addImageFromBytes(bytes, at: at);
+    if (!_disposed && !ok) {
+      _showHudMessage('無法載入這張圖片', icon: Icons.image_not_supported_outlined);
+    }
   }
 
   void hideLassoMenu() {
@@ -1296,30 +1662,48 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void copySelection() {
-    if (_selectedStrokes.isEmpty) return;
+  bool get _hasSelectedContent =>
+      _selectedStrokes.isNotEmpty || _selectedImages.isNotEmpty;
+
+  String _countLabel() {
+    final parts = <String>[
+      if (_selectedStrokes.isNotEmpty) '${_selectedStrokes.length} 筆',
+      if (_selectedImages.isNotEmpty) '${_selectedImages.length} 張圖片',
+    ];
+    return parts.join('、');
+  }
+
+  void _copySelectionToClipboard() {
     _clipboard = _selectedStrokes.map((s) => s.copy()).toList();
+    _clipboardImages = _selectedImages.map((i) => i.copy()).toList();
+  }
+
+  void copySelection() {
+    if (!_hasSelectedContent) return;
+    _copySelectionToClipboard();
     lassoMenu = LassoMenuKind.none;
-    _showHudMessage('已複製 ${_clipboard.length} 筆', icon: Icons.content_copy);
+    _showHudMessage('已複製 ${_countLabel()}', icon: Icons.content_copy);
   }
 
   void cutSelection() {
-    if (_selectedStrokes.isEmpty) return;
-    _clipboard = _selectedStrokes.map((s) => s.copy()).toList();
-    final n = _clipboard.length;
-    _removeSelectedStrokes();
-    _showHudMessage('已剪下 $n 筆', icon: Icons.content_cut);
+    if (!_hasSelectedContent) return;
+    _copySelectionToClipboard();
+    final label = _countLabel();
+    _removeSelected();
+    _showHudMessage('已剪下 $label', icon: Icons.content_cut);
   }
 
   void deleteSelection() {
-    if (_selectedStrokes.isEmpty) return;
-    final n = _selectedStrokes.length;
-    _removeSelectedStrokes();
-    _showHudMessage('已刪除 $n 筆', icon: Icons.delete_outline);
+    if (!_hasSelectedContent) return;
+    final label = _countLabel();
+    _removeSelected();
+    _showHudMessage('已刪除 $label', icon: Icons.delete_outline);
   }
 
-  /// 刪除目前選取的筆劃 (可復原；沿用橡皮擦命令：依移除順序記錄索引)
-  void _removeSelectedStrokes() {
+  /// 刪除目前選取的筆劃與圖片 (一次 Undo；筆劃沿用橡皮擦命令：依移除順序記錄索引)
+  void _removeSelected() {
+    final cmds = <CanvasCommand>[];
+
     final removed = <MapEntry<int, Stroke>>[];
     for (final stroke in _selectedStrokes) {
       final i = _historyStrokes.indexOf(stroke);
@@ -1327,8 +1711,18 @@ class CanvasController extends ChangeNotifier {
       removed.add(MapEntry(i, stroke));
       _historyStrokes.removeAt(i);
     }
-    if (removed.isNotEmpty) {
-      _undoStack.add(EraseStrokesCommand(removed));
+    if (removed.isNotEmpty) cmds.add(EraseStrokesCommand(removed));
+
+    final list = currentPage.images;
+    for (final img in _selectedImages) {
+      final i = list.indexOf(img);
+      if (i == -1) continue;
+      list.removeAt(i);
+      cmds.add(RemoveImageCommand(list, img, i)); // Composite 會反向還原，索引才對得上
+    }
+
+    if (cmds.isNotEmpty) {
+      _undoStack.add(cmds.length == 1 ? cmds.first : CompositeCommand(cmds));
       _redoStack.clear();
       _markDirty();
     }
@@ -1338,12 +1732,15 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 把剪貼簿內容貼到剛才點的位置 (以內容中心對齊，並保持在紙張內)，貼完自動選取方便拖動
+  /// 把剪貼簿內容 (筆劃 + 圖片) 貼到剛才點的位置 (以內容中心對齊，並保持在紙張內)，貼完自動選取方便拖動
   void pasteFromClipboard() {
-    if (_clipboard.isEmpty) return;
+    if (!hasClipboard) return;
     Rect? b;
     for (final s in _clipboard) {
       b = b == null ? s.bounds : b.expandToInclude(s.bounds);
+    }
+    for (final i in _clipboardImages) {
+      b = b == null ? i.rect : b.expandToInclude(i.rect);
     }
     if (b == null) return;
 
@@ -1368,14 +1765,32 @@ class CanvasController extends ChangeNotifier {
           ),
         )
         .toList();
+    final pastedImages = _clipboardImages
+        .map(
+          (i) => PageImage(
+            id: PageImageStore.newId(),
+            fileName: i.fileName, // 共用同一個圖檔
+            rect: i.rect.shift(shift),
+          ),
+        )
+        .toList();
 
-    _historyStrokes.addAll(pasted);
-    _undoStack.add(AddStrokesCommand(pasted));
+    final cmds = <CanvasCommand>[];
+    if (pasted.isNotEmpty) {
+      _historyStrokes.addAll(pasted);
+      cmds.add(AddStrokesCommand(pasted));
+    }
+    for (final img in pastedImages) {
+      currentPage.images.add(img);
+      cmds.add(AddImageCommand(currentPage.images, img));
+    }
+    _undoStack.add(cmds.length == 1 ? cmds.first : CompositeCommand(cmds));
     _redoStack.clear();
     _markDirty();
 
     clearSelection();
     _selectedStrokes.addAll(pasted);
+    _selectedImages.addAll(pastedImages);
     final box = b.shift(shift).inflate(8);
     _selectedLassoPolygon.addAll([
       box.topLeft,
@@ -1408,6 +1823,7 @@ class CanvasController extends ChangeNotifier {
 
   void _calculateLassoSelection() {
     _selectedStrokes.clear();
+    _selectedImages.clear();
 
     // 套索外框：和筆劃外框不相交的筆劃不必逐點檢查
     final polyBounds = _boundsOf(_selectedLassoPolygon);
@@ -1430,9 +1846,21 @@ class CanvasController extends ChangeNotifier {
       }
     }
 
-    if (_selectedStrokes.isEmpty) {
-      _selectedLassoPolygon.clear();
+    // 圖片：套索與圖片矩形有任何重疊 (哪怕只套到一角) 就算圈到
+    if (_selectedLassoPolygon.length >= 3) {
+      final lassoPath = Path()..addPolygon(_selectedLassoPolygon, true);
+      for (final img in currentPage.images) {
+        if (!img.rect.overlaps(polyBounds)) continue; // 外框不相交就不必精算
+        final overlap = Path.combine(
+          PathOperation.intersect,
+          lassoPath,
+          Path()..addRect(img.rect),
+        );
+        if (!overlap.getBounds().isEmpty) _selectedImages.add(img);
+      }
     }
+
+    // 什麼都沒圈到也保留套索圈圈 (之後點圈內可以截圖)，點圈外才取消
     notifyListeners();
   }
 

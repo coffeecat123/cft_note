@@ -3,10 +3,15 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:cft_note/features/canvas/domain/models/stroke.dart';
 import 'package:cft_note/features/canvas/domain/commands/canvas_command.dart';
+import 'package:cft_note/features/document/domain/page_image.dart';
 
 class NotePage {
   final String id;
   List<Stroke> strokes;
+
+  /// 頁面上的圖片 (畫在底圖之上、筆劃之下)。list 物件本身不會被換掉，
+  /// Undo 命令直接持有它。
+  final List<PageImage> images;
   List<CanvasCommand> undoStack;
   List<CanvasCommand> redoStack;
 
@@ -28,6 +33,7 @@ class NotePage {
   NotePage({
     required this.id,
     List<Stroke>? strokes,
+    List<PageImage>? images,
     List<CanvasCommand>? undoStack,
     List<CanvasCommand>? redoStack,
     this.pdfImageBytes,
@@ -38,6 +44,7 @@ class NotePage {
     this.width = 595.0,
     this.height = 842.0,
   })  : strokes = strokes ?? [],
+        images = images ?? [],
         undoStack = undoStack ?? [],
         redoStack = redoStack ?? [];
 
@@ -47,6 +54,7 @@ class NotePage {
   NotePage copy() => NotePage(
     id: id,
     strokes: strokes.map((s) => s.copy()).toList(),
+    images: images.map((i) => i.copy()).toList(),
     pdfFilePath: pdfFilePath,
     pdfPageNumber: pdfPageNumber,
     renderedScale: renderedScale,
@@ -61,6 +69,7 @@ class NotePage {
     'pdfFilePath': pdfFilePath,
     'pdfPageNumber': pdfPageNumber,
     'strokes': strokes.map((s) => s.toJson()).toList(),
+    'images': images.map((i) => i.toJson()).toList(),
   };
 
   factory NotePage.fromJson(Map<String, dynamic> json) {
@@ -73,6 +82,10 @@ class NotePage {
       strokes: (json['strokes'] as List? ?? [])
           .map((s) => Stroke.fromJson(s as Map<String, dynamic>))
           .toList(),
+      images: [
+        for (final j in (json['images'] as List? ?? []))
+          PageImage.fromJson(Map<String, dynamic>.from(j as Map)),
+      ],
     );
   }
 }

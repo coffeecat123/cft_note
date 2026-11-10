@@ -15,6 +15,9 @@ class LassoContextMenu extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onScreenshot;
   final VoidCallback onPaste;
+  final VoidCallback onPasteImage;
+  final bool canPasteStrokes; // 套索剪貼簿有筆劃
+  final bool canPasteImage; // 系統剪貼簿有圖片
 
   const LassoContextMenu({
     super.key,
@@ -25,6 +28,9 @@ class LassoContextMenu extends StatelessWidget {
     required this.onDelete,
     required this.onScreenshot,
     required this.onPaste,
+    required this.onPasteImage,
+    this.canPasteStrokes = true,
+    this.canPasteImage = false,
   });
 
   @override
@@ -36,7 +42,22 @@ class LassoContextMenu extends StatelessWidget {
         _item(Icons.delete_outline, '刪除', onDelete, color: Colors.redAccent),
         _item(Icons.crop_free, '截圖', onScreenshot),
       ],
-      LassoMenuKind.paste => [_item(Icons.content_paste, '貼上', onPaste)],
+      LassoMenuKind.region => [_item(Icons.crop_free, '截圖', onScreenshot)],
+      LassoMenuKind.paste => [
+        // 兩種都有時才加註種類，避免使用者分不清
+        if (canPasteStrokes)
+          _item(
+            Icons.content_paste,
+            canPasteImage ? '貼上筆跡' : '貼上',
+            onPaste,
+          ),
+        if (canPasteImage)
+          _item(
+            Icons.image_outlined,
+            canPasteStrokes ? '貼上圖片' : '貼上',
+            onPasteImage,
+          ),
+      ],
       LassoMenuKind.none => <Widget>[],
     };
     if (items.isEmpty) return const SizedBox.shrink();

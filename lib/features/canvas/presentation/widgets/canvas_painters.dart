@@ -89,6 +89,39 @@ class HistoryLayerPainter extends CustomPainter {
       );
     }
 
+    // 3.8 使用者放上去的圖片 (在底圖之上、筆劃之下；超出紙張的部分裁掉)
+    if (page.images.isNotEmpty) {
+      canvas.save();
+      canvas.clipRect(pageRect);
+      final photoPaint = Paint()..filterQuality = FilterQuality.medium;
+      for (final img in page.images) {
+        final bmp = img.image;
+        if (bmp == null) {
+          controller.requestImage(img); // 尚未解碼 → 背景載入 (載入中 / 檔案遺失先畫灰底)
+          canvas.drawRect(
+            img.rect,
+            Paint()..color = Colors.grey.withAlpha(img.missing ? 90 : 40),
+          );
+          if (img.missing) {
+            final x = Paint()
+              ..color = Colors.grey
+              ..strokeWidth = 2
+              ..style = PaintingStyle.stroke;
+            canvas.drawLine(img.rect.topLeft, img.rect.bottomRight, x);
+            canvas.drawLine(img.rect.topRight, img.rect.bottomLeft, x);
+          }
+          continue;
+        }
+        canvas.drawImageRect(
+          bmp,
+          Rect.fromLTWH(0, 0, bmp.width.toDouble(), bmp.height.toDouble()),
+          img.rect,
+          photoPaint,
+        );
+      }
+      canvas.restore();
+    }
+
     // 4. ★ 核心硬體裁切：筆劃超出紙張部分由 GPU 自然切除，不顯現在工作桌上
     canvas.save();
     canvas.clipRect(pageRect);
@@ -127,7 +160,8 @@ class ActiveLayerPainter extends CustomPainter {
 
     final Rect pageRect = Rect.fromLTWH(0, 0, controller.currentPage.width, controller.currentPage.height);
 
-    // ★ 裁切筆劃在紙張內
+    // ★ 裁切筆劃在紙張內 (圖片選取框不裁切：握把可能在紙張邊緣外)
+    canvas.save();
     canvas.clipRect(pageRect);
 
     // 正在書寫的筆劃
@@ -205,7 +239,57 @@ class ActiveLayerPainter extends CustomPainter {
         ..style = PaintingStyle.stroke;
       canvas.drawCircle(center, radius, borderPaint);
     }
+    canvas.restore(); // 結束紙張裁切
+
+    // 圖片模式：選取框 + 握把
+    final selected = controller.selectedImage;
+    if (controller.currentTool == DrawingTool.image && selected != null) {
+      _paintImageSelection(canvas, selected.rect);
+    }
     canvas.restore();
+  }
+
+  /// 長方形外框；右下角 = 縮放握把，右上角 = 刪除握把 (大小以螢幕像素為準)
+  void _paintImageSelection(Canvas canvas, Rect rect) {
+    final z = controller.zoomPercentage / 100;
+    final r = CanvasController.imageHandleDrawScreen / z;
+    final hair = 1.0 / z;
+
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..color = Colors.blueAccent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0 / z,
+    );
+
+    void handle(Offset c, Color color) {
+      canvas.drawCircle(c, r + 1.5 * hair, Paint()..color = Colors.white);
+      canvas.drawCircle(c, r, Paint()..color = color);
+    }
+
+    final icon = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2.0 * hair
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    final k = r * 0.42;
+
+    // 刪除 (右上角)：紅底白叉
+    final d = rect.topRight;
+    handle(d, Colors.redAccent);
+    canvas.drawLine(d + Offset(-k, -k), d + Offset(k, k), icon);
+    canvas.drawLine(d + Offset(-k, k), d + Offset(k, -k), icon);
+
+    // 縮放 (右下角)：藍底白色斜向雙箭頭
+    final s = rect.bottomRight;
+    handle(s, Colors.blueAccent);
+    final a = s + Offset(-k, -k), b = s + Offset(k, k), h = k * 0.9;
+    canvas.drawLine(a, b, icon);
+    canvas.drawLine(a, a + Offset(h, 0), icon);
+    canvas.drawLine(a, a + Offset(0, h), icon);
+    canvas.drawLine(b, b + Offset(-h, 0), icon);
+    canvas.drawLine(b, b + Offset(0, -h), icon);
   }
 
   void _drawDashedPath(Canvas canvas, Path path, Paint paint,

@@ -1,8 +1,10 @@
 // lib/features/canvas/domain/commands/canvas_command.dart
 // 命令模式 (Command Pattern)：Undo / Redo
 // 從 CanvasController 抽出，同時消除 note_page.dart <-> canvas_controller.dart 的循環依賴。
-import 'dart:ui' show Offset;
+import 'dart:math' show min;
+import 'dart:ui' show Offset, Rect;
 import 'package:perfect_freehand/perfect_freehand.dart';
+import '../../../document/domain/page_image.dart';
 import '../models/stroke.dart';
 
 abstract class CanvasCommand {
@@ -110,6 +112,89 @@ class ChangeStrokesColorCommand implements CanvasCommand {
       if (index != -1) {
         strokes[index] = newStrokes[i];
       }
+    }
+  }
+}
+
+// ============================================================
+// 圖片命令：作用在頁面的圖片清單 / 圖片本身，與 strokes 參數無關
+// ============================================================
+
+// 新增圖片
+class AddImageCommand implements CanvasCommand {
+  final List<PageImage> images;
+  final PageImage image;
+  AddImageCommand(this.images, this.image);
+  @override
+  void undo(List<Stroke> strokes) => images.remove(image);
+  @override
+  void redo(List<Stroke> strokes) {
+    if (!images.contains(image)) images.add(image);
+  }
+}
+
+// 刪除圖片 (記住原本的疊放順序)
+class RemoveImageCommand implements CanvasCommand {
+  final List<PageImage> images;
+  final PageImage image;
+  final int index;
+  RemoveImageCommand(this.images, this.image, this.index);
+  @override
+  void undo(List<Stroke> strokes) {
+    if (!images.contains(image)) images.insert(min(index, images.length), image);
+  }
+
+  @override
+  void redo(List<Stroke> strokes) => images.remove(image);
+}
+
+// 平移 / 縮放圖片
+class TransformImageCommand implements CanvasCommand {
+  final PageImage image;
+  final Rect from;
+  final Rect to;
+  TransformImageCommand(this.image, this.from, this.to);
+  @override
+  void undo(List<Stroke> strokes) => image.rect = from;
+  @override
+  void redo(List<Stroke> strokes) => image.rect = to;
+}
+
+// 多個命令合併成一次 Undo (例如套索同時移動筆劃與圖片)
+class CompositeCommand implements CanvasCommand {
+  final List<CanvasCommand> commands;
+  CompositeCommand(this.commands);
+  @override
+  void undo(List<Stroke> strokes) {
+    for (final c in commands.reversed) {
+      c.undo(strokes);
+    }
+  }
+
+  @override
+  void redo(List<Stroke> strokes) {
+    for (final c in commands) {
+      c.redo(strokes);
+    }
+  }
+}
+
+// 套索移動圖片
+class MoveImagesCommand implements CanvasCommand {
+  final List<PageImage> images;
+  final Offset delta;
+  MoveImagesCommand(this.images, this.delta);
+  @override
+  void undo(List<Stroke> strokes) {
+    for (final i in images) {
+      i.rect = i.rect.shift(-delta);
+    }
+  }
+
+  @override
+  void redo(List<Stroke> strokes) {
+    for (final i in images) {
+      i.rect = i.rect.shift(delta);
     }
   }
 }

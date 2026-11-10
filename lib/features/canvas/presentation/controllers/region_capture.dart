@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import '../../../../core/engine/tile_planner.dart';
+import '../../../document/data/page_image_store.dart';
 import '../../../document/domain/note_page.dart';
 import '../../../pdf_import_export/services/pdf_service.dart';
 import '../../domain/models/stroke.dart';
@@ -44,7 +45,8 @@ class RegionCapture {
       canvas.clipRect(region);
 
       final pageRect = ui.Rect.fromLTWH(0, 0, page.width, page.height);
-      canvas.drawRect(pageRect, ui.Paint()..color = const ui.Color(0xFFFFFFFF));
+      // 整個輸出範圍先鋪不透明白底，PNG 不會有任何透明像素 (圖片 / PDF 有透明處也一樣)
+      canvas.drawRect(region, ui.Paint()..color = const ui.Color(0xFFFFFFFF));
 
       // 底圖
       final imagePaint = ui.Paint()..filterQuality = ui.FilterQuality.medium;
@@ -86,6 +88,25 @@ class RegionCapture {
           if (y < region.top - 1 || y > region.bottom + 1) continue;
           canvas.drawLine(ui.Offset(20, y), ui.Offset(page.width - 20, y), linePaint);
         }
+      }
+
+      // 使用者放上去的圖片 (在筆劃之下、裁在紙張內)
+      if (page.images.isNotEmpty) {
+        canvas.save();
+        canvas.clipRect(pageRect);
+        for (final img in page.images) {
+          if (!img.rect.overlaps(region)) continue;
+          await PageImageStore.ensureLoaded(img);
+          final bmp = img.image;
+          if (bmp == null) continue;
+          canvas.drawImageRect(
+            bmp,
+            ui.Rect.fromLTWH(0, 0, bmp.width.toDouble(), bmp.height.toDouble()),
+            img.rect,
+            imagePaint,
+          );
+        }
+        canvas.restore();
       }
 
       // 全部筆劃 (圈選範圍內看得到的都算)
