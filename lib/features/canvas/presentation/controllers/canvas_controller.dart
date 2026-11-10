@@ -13,11 +13,13 @@ import 'package:perfect_freehand/perfect_freehand.dart';
 import '../../../../core/algorithms/ray_casting.dart';
 import '../../../../core/engine/repaint_signal.dart';
 import '../../domain/models/brush_settings.dart';
+import '../../domain/models/canvas_prefs.dart';
 import '../../domain/models/stroke.dart';
 import '../../domain/commands/canvas_command.dart';
 import '../../domain/models/page_layout_mode.dart';
 import '../../domain/models/tools.dart';
 import '../../../document/data/page_image_store.dart';
+import '../../../document/data/storage_service.dart';
 import '../../../pdf_import_export/services/clipboard_image_service.dart';
 import '../../../document/domain/note_page.dart';
 import '../../../document/domain/page_image.dart';
@@ -239,6 +241,7 @@ class CanvasController extends ChangeNotifier {
     }
     final scale = zoomPercentage / 100;
     layoutMode = mode;
+    _schedulePrefsSave();
     clearSelection();
     eraserPosition = null;
     if (!isContinuous) _clearPictureCache();
@@ -356,6 +359,7 @@ class CanvasController extends ChangeNotifier {
   double _previousDistance = 0.0;
   Offset _previousMidpoint = Offset.zero;
   bool _isScalingLocked = false;
+  bool _gestureCancelled = false; // 切換工具而被取消的動作：到所有手指離開前都不處理
 
   // 套索狀態
   final List<Offset> _currentLassoDrawing = [];
@@ -439,14 +443,33 @@ class CanvasController extends ChangeNotifier {
       pages.add(NotePage(id: 'page_1'));
     }
 
+    // ★ 還原上次的畫筆 / 顏色 / 頁面顯示方式 (要在還原視野矩陣之前，連續模式的頁面位置才正確)
+    final prefs = CanvasPrefs.initial;
+    brush = prefs.brush;
+    strokeColor = prefs.strokeColor;
+    layoutMode = prefs.layoutMode;
+    if (prefs.favoriteColors != null) {
+      favoriteColors
+        ..clear()
+        ..addAll(prefs.favoriteColors!);
+    }
+    recentColors.addAll(prefs.recentColors.take(8));
+
+    final targetPage = currentNotebook.lastViewedPageIndex.clamp(0, pages.length - 1);
+
     // ★ 還原該筆記本上次儲存的縮放平移矩陣；沒有紀錄 (全新筆記) 則等取得畫面大小後置中
     if (currentNotebook.transformMatrix != null) {
-      transformation = Matrix4.fromList(currentNotebook.transformMatrix!);
+      var restored = Matrix4.fromList(currentNotebook.transformMatrix!);
+      if (isContinuous) {
+        // 存的是「該頁在原點」的矩陣，換回連續版面中的位置
+        final o = pageOrigin(targetPage);
+        restored = restored * Matrix4.translationValues(-o.dx, -o.dy, 0.0);
+      }
+      transformation = restored;
     } else {
       _needsInitialCenter = true;
     }
 
-    final targetPage = currentNotebook.lastViewedPageIndex.clamp(0, pages.length - 1);
     _loadPageState(targetPage);
   }
 
@@ -608,6 +631,7 @@ class CanvasController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    flushPrefs();
     images.dispose();
     _saveCurrentPageState(); // ★ 核心修復：退出畫布時，立即把筆跡存回當前頁面！
     _zoomIndicatorTimer?.cancel();
@@ -628,10 +652,36 @@ class CanvasController extends ChangeNotifier {
 
   void _startZoomIndicatorFadeout() {
     _zoomIndicatorTimer?.cancel();
-    _zoomIndicatorTimer = Timer(const Duration(milliseconds: 1500), () {
+    _zoomIndicatorTimer = Timer(const Duration(milliseconds: 700), () {
       showZoomIndicator = false;
       notifyListeners();
     });
+  }
+
+  // ==========================================
+  // 偏好設定 (畫筆 / 顏色 / 頁面顯示方式) 存檔：防抖，停止調整 0.6 秒後才寫入
+  // ==========================================
+  Timer? _prefsSaveTimer;
+
+  void _schedulePrefsSave() {
+    _prefsSaveTimer?.cancel();
+    _prefsSaveTimer = Timer(const Duration(milliseconds: 600), flushPrefs);
+  }
+
+  /// 立刻寫入偏好設定 (App 進背景 / 離開畫布時呼叫)
+  void flushPrefs() {
+    if (_prefsSaveTimer == null) return; // 沒有待寫入的變更
+    _prefsSaveTimer!.cancel();
+    _prefsSaveTimer = null;
+    final prefs = CanvasPrefs(
+      brush: brush,
+      strokeColor: strokeColor,
+      layoutMode: layoutMode,
+      recentColors: List.of(recentColors),
+      favoriteColors: List.of(favoriteColors),
+    );
+    CanvasPrefs.initial = prefs; // 下次開筆記 / 切換標籤時直接用最新值
+    unawaited(StorageService.saveCanvasPrefs(prefs.toJson()));
   }
 
   // 私有輔助：記錄最近使用顏色
@@ -641,12 +691,14 @@ class CanvasController extends ChangeNotifier {
     if (recentColors.length > 8) {
       recentColors.removeLast();
     }
+    _schedulePrefsSave();
   }
 
   // 加入喜愛
   void addFavoriteColor(Color color) {
     if (!favoriteColors.contains(color)) {
       favoriteColors.add(color);
+      _schedulePrefsSave();
       notifyListeners();
     }
   }
@@ -654,6 +706,7 @@ class CanvasController extends ChangeNotifier {
   // 移除喜愛
   void removeFavoriteColor(Color color) {
     favoriteColors.remove(color);
+    _schedulePrefsSave();
     notifyListeners();
   }
 
@@ -783,7 +836,72 @@ class CanvasController extends ChangeNotifier {
     if (isContinuous) _placeCurrent();
   }
 
+  /// 手指 / 筆還按在畫布上、卻切換了工具：整個動作取消 (寫到一半的筆劃不留、
+  /// 擦掉的筆劃還原、套索拖曳移回原位、圖片操作還原)，而且這次按下之後的
+  /// 移動 / 抬起都不再生效，直到所有手指離開。
+  void _cancelActiveGesture() {
+    if (_pointerPositions.isEmpty) return;
+    _gestureCancelled = true;
+
+    // 畫筆：丟掉寫到一半的筆劃
+    _currentPoints.clear();
+
+    // 橡皮擦：把這一次已擦掉的筆劃放回去
+    if (_currentErasedBatch.isNotEmpty) {
+      for (final entry in _currentErasedBatch.reversed) {
+        if (entry.key <= _historyStrokes.length) {
+          _historyStrokes.insert(entry.key, entry.value);
+        } else {
+          _historyStrokes.add(entry.value);
+        }
+      }
+      _currentErasedBatch.clear();
+      _bakeHistoryToPicture();
+    }
+    eraserPosition = null;
+    _lastEraseScenePoint = null;
+
+    // 套索：取消圈選 / 長按；拖曳到一半就移回原位
+    _lassoLongPressTimer?.cancel();
+    _currentLassoDrawing.clear();
+    _isPotentialNewLasso = false;
+    if (_isDraggingSelection && _selectionDragStarted && _totalDragDelta != Offset.zero) {
+      final back = -_totalDragDelta;
+      for (final stroke in _selectedStrokes) {
+        for (int i = 0; i < stroke.points.length; i++) {
+          final p = stroke.points[i];
+          stroke.points[i] = PointVector(p.x + back.dx, p.y + back.dy, p.pressure);
+        }
+      }
+      for (final img in _selectedImages) {
+        img.rect = img.rect.shift(back);
+      }
+      for (int i = 0; i < _selectedLassoPolygon.length; i++) {
+        _selectedLassoPolygon[i] = _selectedLassoPolygon[i] + back;
+      }
+      if (_selectedStrokes.isNotEmpty) _bakeHistoryToPicture();
+    }
+    _isDraggingSelection = false;
+    _selectionDragStarted = false;
+    _totalDragDelta = Offset.zero;
+
+    // 圖片模式：搬移 / 縮放做到一半就還原成按下前的位置
+    final img = _selectedImage;
+    final start = _imageStartRect;
+    if (img != null &&
+        start != null &&
+        (_imageOp == _ImageOp.move || _imageOp == _ImageOp.resize)) {
+      img.rect = start;
+    }
+    _imageOp = _ImageOp.none;
+    _imageStartRect = null;
+    _imageDragStarted = false;
+    _imageCandidate = null;
+    _imageDeselectPending = false;
+  }
+
   void setTool(DrawingTool tool) {
+    if (tool != currentTool) _cancelActiveGesture();
     currentTool = tool;
     eraserPosition = null; // ★ 切換工具時清空圓圈
     activeRepaintNotifier.notifyListeners();
@@ -796,6 +914,7 @@ class CanvasController extends ChangeNotifier {
   // 更新筆刷設定 (粗細、平滑度、防手抖、壓感)
   void updateBrush(BrushSettings newSettings) {
     brush = newSettings;
+    _schedulePrefsSave();
     notifyListeners();
   }
 
@@ -856,6 +975,7 @@ class CanvasController extends ChangeNotifier {
   // 3. 結束調色：手指放開滑桿時呼叫 (打包成唯一一條 Undo 指令)
   void commitColorChange(Color finalColor) {
     strokeColor = finalColor;
+    _schedulePrefsSave();
 
     if (_selectedStrokes.isNotEmpty && _colorChangeInitialStrokes != null) {
       // 只有顏色真的不同時才產生 Undo 指令
@@ -885,6 +1005,7 @@ class CanvasController extends ChangeNotifier {
   // 套索選中字換色
   void changeSelectedStrokesColor(Color newColor) {
     strokeColor = newColor;
+    _schedulePrefsSave();
 
     if (_selectedStrokes.isNotEmpty) {
       final List<Stroke> oldStrokes = List.from(_selectedStrokes);
@@ -1242,6 +1363,7 @@ class CanvasController extends ChangeNotifier {
   // 1. 手指落下
   void onPointerDown(int pointerId, Offset position, double pressure) {
     _pointerPositions[pointerId] = position;
+    if (_pointerPositions.length == 1) _gestureCancelled = false;
 
     if (_pointerPositions.length >= 2) {
       _isScalingLocked = true;
@@ -1328,6 +1450,7 @@ class CanvasController extends ChangeNotifier {
     _pointerPositions[pointerId] = position;
 
     if (_isScalingLocked && _pointerPositions.length < 2) return;
+    if (_gestureCancelled && _pointerPositions.length < 2) return;
 
     if (!_isScalingLocked && _pointerPositions.length == 1) {
       final scenePoint = toScene(position);
@@ -1506,7 +1629,7 @@ class CanvasController extends ChangeNotifier {
 
     _pointerPositions.remove(pointerId);
 
-    if (!_isScalingLocked) {
+    if (!_isScalingLocked && !_gestureCancelled) {
       if (currentTool == DrawingTool.image) {
         _imageUp();
       } else if (currentTool == DrawingTool.pen && _currentPoints.isNotEmpty) {
@@ -1578,6 +1701,7 @@ class CanvasController extends ChangeNotifier {
     if (_pointerPositions.isEmpty) {
       final wasScaling = _isScalingLocked;
       _isScalingLocked = false;
+      _gestureCancelled = false;
       _previousDistance = 0.0;
 
       // ★ 雙指縮放放開時，自動向 pdfrx 索取高清渲染

@@ -26,6 +26,29 @@ class BrushSettings {
     );
   }
 
+  Map<String, dynamic> toJson() => {
+    'size': size,
+    'thinning': thinning,
+    'smoothing': smoothing,
+    'streamline': streamline,
+  };
+
+  /// 讀取存檔：缺欄位 / 型別不對 / 超出範圍都退回預設值，不會丟例外
+  factory BrushSettings.fromJson(Map<String, dynamic> json) {
+    double pick(String key, double fallback, double lo, double hi) {
+      final v = json[key];
+      return v is num ? v.toDouble().clamp(lo, hi).toDouble() : fallback;
+    }
+
+    const d = BrushSettings();
+    return BrushSettings(
+      size: pick('size', d.size, 1.0, 50.0),
+      thinning: pick('thinning', d.thinning, 0.0, 1.0),
+      smoothing: pick('smoothing', d.smoothing, 0.0, 1.0),
+      streamline: pick('streamline', d.streamline, 0.0, 1.0),
+    );
+  }
+
   // --- 經典筆刷預設 ---
   // 1. 鋼筆 (Fountain Pen)：強壓感、高彈性
   static const fountainPen = BrushSettings(

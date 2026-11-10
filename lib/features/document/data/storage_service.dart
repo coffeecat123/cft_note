@@ -20,6 +20,7 @@ class StorageService {
   static const String _foldersFileName = 'cft_folders.json';
   static const String _fileName = 'cft_notebooks.json';
   static const String _sessionFileName = 'cft_session.json'; // 記錄開啟的 Tab
+  static const String _canvasPrefsFileName = 'cft_canvas_prefs.json'; // 畫筆 / 顏色 / 頁面顯示方式
 
   // ------------------------------------------------------------
   // 警告收集 (供 UI 顯示)
@@ -237,6 +238,26 @@ class StorageService {
 
   static Future<Map<String, dynamic>?> loadSession() async {
     final decoded = await _readJson(_sessionFileName, (d) => d is Map);
+    if (decoded == null) return null;
+    return Map<String, dynamic>.from(decoded as Map);
+  }
+
+  // ------------------------------------------------------------
+  // 畫布偏好 (畫筆、顏色、頁面顯示方式)
+  // ------------------------------------------------------------
+  static Future<void> saveCanvasPrefs(Map<String, dynamic> prefs) async {
+    final String json;
+    try {
+      json = jsonEncode(prefs);
+    } catch (e) {
+      _warn('畫布設定無法編碼，已略過儲存：$e');
+      return;
+    }
+    await _write(_canvasPrefsFileName, json);
+  }
+
+  static Future<Map<String, dynamic>?> loadCanvasPrefs() async {
+    final decoded = await _readJson(_canvasPrefsFileName, (d) => d is Map);
     if (decoded == null) return null;
     return Map<String, dynamic>.from(decoded as Map);
   }

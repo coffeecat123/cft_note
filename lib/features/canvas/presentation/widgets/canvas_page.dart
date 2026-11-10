@@ -54,6 +54,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     _autosaveTimer = null;
     _firstDirtyAt = null;
     _controller.saveCurrentPage();
+    _controller.flushPrefs();
     final shelf = widget.shelfController;
     shelf.activeTabIndex = _controller.activeNotebookIndex;
     shelf.openTabs
@@ -301,17 +302,6 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                   color: Colors.white,
                   child: Row(
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.only(left: 12, right: 8),
-                        child: _buildPageNavPill(context),
-                      ),
-                      const VerticalDivider(
-                        width: 1,
-                        indent: 12,
-                        endIndent: 12,
-                        color: Colors.black12,
-                      ),
-
                       Expanded(
                         child: ScrollConfiguration(
                           behavior: const MaterialScrollBehavior().copyWith(
@@ -328,6 +318,13 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
+                                _buildPageNavPill(context),
+                                const VerticalDivider(
+                                  width: 1,
+                                  indent: 12,
+                                  endIndent: 12,
+                                  color: Colors.black12,
+                                ),
                                 // 智慧筆刷按鈕 (未選中切換，已選中開啟工作室)
                                 IconButton(
                                   icon: Icon(
@@ -451,37 +448,39 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                     ),
                                   ),
                                 ),
-                                
-                                const VerticalDivider(
-                                  width: 16,
-                                  indent: 14,
-                                  endIndent: 14,
-                                ),
 
-                                IconButton(
-                                  icon: const Icon(Icons.undo, size: 20),
-                                  tooltip: '復原',
-                                  onPressed: _controller.canUndo
-                                      ? _controller.undo
-                                      : null,
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.redo, size: 20),
-                                  tooltip: '重做',
-                                  onPressed: _controller.canRedo
-                                      ? _controller.redo
-                                      : null,
-                                ),
-                                
-                                // ★ 更多選單：匯出 PDF / 刪除當前頁面
-                                _buildPageListButton(),
-                                _buildMoreMenu(),
-                                const SizedBox(width: 12),
+                                const SizedBox(width: 8),
                               ],
                             ),
                           ),
                         ),
                       ),
+
+                      // ★ 靠右固定：復原 / 重做 / 頁面列表 / 更多
+                      //   (工具太多時只有左邊的工具區會捲動，這一組永遠在最右邊)
+                      const VerticalDivider(
+                        width: 1,
+                        indent: 12,
+                        endIndent: 12,
+                        color: Colors.black12,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.undo, size: 20),
+                        tooltip: '復原',
+                        onPressed: _controller.canUndo
+                            ? _controller.undo
+                            : null,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.redo, size: 20),
+                        tooltip: '重做',
+                        onPressed: _controller.canRedo
+                            ? _controller.redo
+                            : null,
+                      ),
+                      _buildPageListButton(),
+                      _buildMoreMenu(),
+                      const SizedBox(width: 4),
                     ],
                   ),
                 ),
@@ -637,8 +636,11 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     }
     final t = DateTime.now();
     String p(int n) => n.toString().padLeft(2, '0');
-    final stamp = '${t.year}${p(t.month)}${p(t.day)}_${p(t.hour)}${p(t.minute)}${p(t.second)}';
-    final title = ImageExportService.safeName(_controller.currentNotebook.title);
+    final stamp =
+        '${t.year}${p(t.month)}${p(t.day)}_${p(t.hour)}${p(t.minute)}${p(t.second)}';
+    final title = ImageExportService.safeName(
+      _controller.currentNotebook.title,
+    );
     // 先給使用者預覽，再選擇：分享 / 存到相簿 / 儲存檔案
     await ScreenshotSheet.show(
       context,
@@ -743,10 +745,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  '頁面顯示方式',
-                  style: const TextStyle(fontSize: 13),
-                ),
+                child: Text('頁面顯示方式', style: const TextStyle(fontSize: 13)),
               ),
               Text(
                 _controller.layoutMode.label,
@@ -891,92 +890,73 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
 
   Widget _buildPageNavPillBody() {
     final idx = _controller.focusPageIndex; // 單頁模式 = 目前頁
-    return Container(
-      height: 32,
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      decoration: BoxDecoration(
-        color: Colors.grey[100],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: idx > 0
-                ? _controller.previousPage
-                : null,
-            child: Padding(
-              padding: const EdgeInsets.all(4),
-              child: Icon(
-                Icons.arrow_back_ios_new,
-                size: 13,
-                color: idx > 0
-                    ? Colors.black87
-                    : Colors.grey[400],
-              ),
-            ),
+    final canPrev = idx > 0;
+    final canNext = idx < _controller.totalPages - 1;
+
+    // 與右側工具按鈕 (undo / redo / 更多…) 同大：圖示 20、點擊範圍 40
+    const double iconSize = 20;
+    const btnConstraints = BoxConstraints(minWidth: 40, minHeight: 40);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          iconSize: iconSize,
+          padding: EdgeInsets.zero,
+          constraints: btnConstraints,
+          tooltip: '上一頁',
+          icon: Icon(
+            Icons.arrow_back_ios_new,
+            color: canPrev ? Colors.black87 : Colors.grey[400],
           ),
-          const SizedBox(width: 4),
-          Text(
-            '${idx + 1} / ${_controller.totalPages}',
-            style: const TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 12,
-              color: Colors.black87,
-            ),
+          onPressed: canPrev ? _controller.previousPage : null,
+        ),
+        Text(
+          '${idx + 1} / ${_controller.totalPages}',
+          style: const TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+            color: Colors.black87,
           ),
-          const SizedBox(width: 4),
-          InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: idx < _controller.totalPages - 1
-                ? _controller.nextPage
-                : null,
-            child: Padding(
-              padding: const EdgeInsets.all(4),
-              child: Icon(
-                Icons.arrow_forward_ios,
-                size: 13,
-                color: idx < _controller.totalPages - 1
-                    ? Colors.black87
-                    : Colors.grey[400],
-              ),
-            ),
+        ),
+        IconButton(
+          iconSize: iconSize,
+          padding: EdgeInsets.zero,
+          constraints: btnConstraints,
+          tooltip: '下一頁',
+          icon: Icon(
+            Icons.arrow_forward_ios,
+            color: canNext ? Colors.black87 : Colors.grey[400],
           ),
-          Container(
-            width: 1,
-            height: 16,
-            color: Colors.grey[300],
-            margin: const EdgeInsets.symmetric(horizontal: 4),
-          ),
-          PopupMenuButton<String>(
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.add, size: 18, color: Colors.blueAccent),
-            tooltip: '在此頁後插入...',
-            onSelected: (value) async {
-              if (value == 'blank') {
-                _controller.insertBlankPageAfterCurrent();
-              } else if (value == 'pdf') {
-                final pages = await PdfService.pickAndRenderPdf();
-                if (pages != null && pages.isNotEmpty) {
-                  await _controller.insertPdfPagesAfterCurrent(pages);
-                }
+          onPressed: canNext ? _controller.nextPage : null,
+        ),
+        PopupMenuButton<String>(
+          padding: EdgeInsets.zero,
+          iconSize: iconSize,
+          icon: const Icon(Icons.add, color: Colors.blueAccent),
+          tooltip: '在此頁後插入...',
+          onSelected: (value) async {
+            if (value == 'blank') {
+              _controller.insertBlankPageAfterCurrent();
+            } else if (value == 'pdf') {
+              final pages = await PdfService.pickAndRenderPdf();
+              if (pages != null && pages.isNotEmpty) {
+                await _controller.insertPdfPagesAfterCurrent(pages);
               }
-            },
-            itemBuilder: (ctx) => [
-              const PopupMenuItem(
-                value: 'blank',
-                child: Text('在此頁後插入空白頁', style: TextStyle(fontSize: 13)),
-              ),
-              const PopupMenuItem(
-                value: 'pdf',
-                child: Text('在此頁後插入 PDF...', style: TextStyle(fontSize: 13)),
-              ),
-            ],
-          ),
-        ],
-      ),
+            }
+          },
+          itemBuilder: (ctx) => [
+            const PopupMenuItem(
+              value: 'blank',
+              child: Text('在此頁後插入空白頁', style: TextStyle(fontSize: 13)),
+            ),
+            const PopupMenuItem(
+              value: 'pdf',
+              child: Text('在此頁後插入 PDF...', style: TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
