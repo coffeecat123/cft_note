@@ -46,3 +46,7 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# 忽略所有子資料夾中的 build 與 .gradle 產物
+**/build/
+**/.gradle/
