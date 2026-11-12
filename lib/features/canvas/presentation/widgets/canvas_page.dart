@@ -17,6 +17,7 @@ import '../../domain/models/tools.dart';
 import '../controllers/canvas_controller.dart';
 import '../toolbars/brush_settings_sheet.dart';
 import '../toolbars/color_settings_sheet.dart';
+import '../toolbars/eraser_settings_sheet.dart';
 import '../toolbars/page_background_sheet.dart';
 import 'canvas_painters.dart';
 import 'lasso_context_menu.dart';
@@ -438,9 +439,23 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                         : colors.toolbarIcon,
                                     size: 20,
                                   ),
-                                  tooltip: s.eraser,
-                                  onPressed: () =>
-                                      _controller.setTool(DrawingTool.eraser),
+                                  // 未選中 → 切換到橡皮擦；已選中 → 調整大小 (與筆刷相同)
+                                  tooltip:
+                                      _controller.currentTool ==
+                                          DrawingTool.eraser
+                                      ? s.eraserSettings
+                                      : s.eraser,
+                                  onPressed: () {
+                                    if (_controller.currentTool !=
+                                        DrawingTool.eraser) {
+                                      _controller.setTool(DrawingTool.eraser);
+                                    } else {
+                                      EraserSettingsSheet.show(
+                                        context,
+                                        _controller,
+                                      );
+                                    }
+                                  },
                                 ),
 
                                 // 套索工具

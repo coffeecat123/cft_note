@@ -37,6 +37,9 @@ class CanvasPrefs {
   /// 最近使用的頁面背景 (最新的在前，與「最近使用顏色」相同的概念)
   final List<PageBackground> recentBackgrounds;
 
+  /// 橡皮擦半徑 (螢幕像素)
+  final double eraserRadius;
+
   const CanvasPrefs({
     this.brush = BrushSettings.fountainPen,
     this.strokeColor = Colors.black,
@@ -46,6 +49,7 @@ class CanvasPrefs {
     this.lastBlankBackground = PageBackground.standard,
     this.newPageStyle = NewPageStyle.lastUsed,
     this.recentBackgrounds = const [],
+    this.eraserRadius = 15.0,
   });
 
   /// App 啟動時 (main) 讀進來；之後 CanvasController 建立時套用，
@@ -62,6 +66,7 @@ class CanvasPrefs {
     'lastBlankBackground': lastBlankBackground.toJson(),
     'newPageStyle': newPageStyle.name,
     'recentBackgrounds': recentBackgrounds.map((b) => b.toJson()).toList(),
+    'eraserRadius': eraserRadius,
   };
 
   factory CanvasPrefs.fromJson(Map<String, dynamic> json) {
@@ -99,6 +104,9 @@ class CanvasPrefs {
               .map(PageBackground.fromJson)
               .toList()
           : const [],
+      eraserRadius: json['eraserRadius'] is num
+          ? (json['eraserRadius'] as num).toDouble().clamp(5.0, 60.0).toDouble()
+          : 15.0,
     );
   }
 }

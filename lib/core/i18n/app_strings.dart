@@ -177,6 +177,8 @@ class S {
   String get openBrushStudio => _t('開啟筆刷工作室', 'Open Brush Studio');
   String get brush => _t('筆刷', 'Brush');
   String get eraser => _t('筆畫橡皮擦', 'Stroke eraser');
+  String get eraserSettings => _t('橡皮擦大小', 'Eraser size');
+  String get eraserSize => _t('半徑', 'Radius');
   String get lasso => _t('套索工具', 'Lasso');
   String get insertImage => _t('插入圖片', 'Insert image');
   String get imageMode => _t('圖片模式', 'Image mode');

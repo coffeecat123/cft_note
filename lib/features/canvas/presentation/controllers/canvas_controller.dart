@@ -453,6 +453,7 @@ class CanvasController extends ChangeNotifier {
     lastBlankBackground = prefs.lastBlankBackground;
     newPageStyle = prefs.newPageStyle;
     recentBackgrounds.addAll(prefs.recentBackgrounds.take(8));
+    eraserScreenRadius = prefs.eraserRadius;
     if (prefs.favoriteColors != null) {
       favoriteColors
         ..clear()
@@ -584,7 +585,17 @@ class CanvasController extends ChangeNotifier {
   // ==========================================
   // 橡皮擦物理大小與預覽位置
   // ==========================================
-  final double eraserScreenRadius = 15.0; // 在螢幕上的真實半徑 (15px)
+  static const double minEraserRadius = 5;
+  static const double maxEraserRadius = 60;
+  double eraserScreenRadius = 15.0; // 在螢幕上的真實半徑 (預設 15px，可調整並記住)
+
+  void setEraserRadius(double radius) {
+    final r = radius.clamp(minEraserRadius, maxEraserRadius).toDouble();
+    if (r == eraserScreenRadius) return;
+    eraserScreenRadius = r;
+    _schedulePrefsSave();
+    notifyListeners();
+  }
   Offset? eraserPosition; // 當前橡皮擦位置 (用於即時圓圈預覽)
 
   // 轉換成畫布世界座標下的感應半徑 (隨縮放動態調整，維持螢幕大小恆定)
@@ -691,6 +702,7 @@ class CanvasController extends ChangeNotifier {
       lastBlankBackground: lastBlankBackground,
       newPageStyle: newPageStyle,
       recentBackgrounds: List.of(recentBackgrounds),
+      eraserRadius: eraserScreenRadius,
     );
     CanvasPrefs.initial = prefs; // 下次開筆記 / 切換標籤時直接用最新值
     unawaited(StorageService.saveCanvasPrefs(prefs.toJson()));
