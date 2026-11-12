@@ -4,6 +4,7 @@ import 'package:cft_note/features/canvas/domain/models/tools.dart';
 import 'package:flutter/material.dart';
 import 'package:perfect_freehand/perfect_freehand.dart';
 import '../../../document/domain/page_background.dart';
+import '../../domain/models/stroke.dart';
 import '../controllers/canvas_controller.dart';
 
 class HistoryLayerPainter extends CustomPainter {
@@ -186,14 +187,9 @@ class ActiveLayerPainter extends CustomPainter {
         ..color = controller.strokeColor
         ..style = PaintingStyle.fill;
 
-      final path = Path();
       if (outlinePoints.isNotEmpty) {
-        path.moveTo(outlinePoints.first.dx, outlinePoints.first.dy);
-        for (int i = 1; i < outlinePoints.length; i++) {
-          path.lineTo(outlinePoints[i].dx, outlinePoints[i].dy);
-        }
-        path.close();
-        canvas.drawPath(path, paint);
+        // 與完成後的筆劃共用同一個平滑函式，放開筆時外觀不會跳
+        canvas.drawPath(smoothOutlinePath(outlinePoints), paint);
       }
     }
 

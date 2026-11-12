@@ -4,6 +4,37 @@ import 'package:perfect_freehand/perfect_freehand.dart';
 import '../../../../core/algorithms/segment_math.dart';
 import 'brush_settings.dart';
 
+/// perfect_freehand 給的輪廓是一圈「多邊形頂點」，直接 lineTo 連起來會是很多條直線拼成的
+/// (放大後看得到稜角、轉彎處有尖刺)。改成官方建議的畫法：
+/// 以每個頂點當控制點、相鄰頂點的中點當終點，連成二次貝茲曲線，邊緣就是圓滑的。
+/// 預覽中的筆劃與完成後的筆劃共用這一個函式，所以放開筆時外觀不會跳。
+Path smoothOutlinePath(List<Offset> pts) {
+  final path = Path();
+  final n = pts.length;
+  if (n == 0) return path;
+  if (n < 3) {
+    path.moveTo(pts.first.dx, pts.first.dy);
+    for (int i = 1; i < n; i++) {
+      path.lineTo(pts[i].dx, pts[i].dy);
+    }
+    path.close();
+    return path;
+  }
+  path.moveTo(pts[0].dx, pts[0].dy);
+  for (int i = 0; i < n; i++) {
+    final p = pts[i];
+    final q = pts[(i + 1) % n];
+    path.quadraticBezierTo(
+      p.dx,
+      p.dy,
+      (p.dx + q.dx) / 2,
+      (p.dy + q.dy) / 2,
+    );
+  }
+  path.close();
+  return path;
+}
+
 class Stroke {
   final List<PointVector> points;
   final Color color;
@@ -72,8 +103,7 @@ class Stroke {
   }
 
   Path _buildOutline() {
-    final path = Path();
-    if (points.isEmpty) return path;
+    if (points.isEmpty) return Path();
     final outline = getStroke(
       points,
       options: StrokeOptions(
@@ -82,16 +112,10 @@ class Stroke {
         smoothing: settings.smoothing,
         streamline: settings.streamline,
         simulatePressure: false,
+        isComplete: true, // 已完成的筆劃：收尾要畫完整，不留「還在書寫」的尾巴
       ),
     );
-    if (outline.isNotEmpty) {
-      path.moveTo(outline.first.dx, outline.first.dy);
-      for (int i = 1; i < outline.length; i++) {
-        path.lineTo(outline[i].dx, outline[i].dy);
-      }
-      path.close();
-    }
-    return path;
+    return smoothOutlinePath(outline);
   }
 
   // ------------------------------------------------------------

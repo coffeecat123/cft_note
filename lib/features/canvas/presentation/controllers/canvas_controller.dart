@@ -38,6 +38,7 @@ class CanvasController extends ChangeNotifier {
   final List<CanvasCommand> _undoStack = [];
   final List<CanvasCommand> _redoStack = [];
   final List<PointVector> _currentPoints = [];
+  double _smoothedPressure = 0.5; // 目前筆劃平滑後的壓力
   final List<MapEntry<int, Stroke>> _currentErasedBatch = [];
   Offset? _lastEraseScenePoint; // 橡皮擦上一個取樣點 (用來做線段掃掠碰撞)
   int _incrementalBakes = 0;
@@ -1515,6 +1516,7 @@ class CanvasController extends ChangeNotifier {
       final scenePoint = toScene(position);
 
       if (currentTool == DrawingTool.pen) {
+        _smoothedPressure = pressure;
         _currentPoints.add(PointVector(scenePoint.dx, scenePoint.dy, pressure));
         activeRepaintNotifier.notifyListeners();
         return;
@@ -1560,7 +1562,18 @@ class CanvasController extends ChangeNotifier {
         if (_currentPoints.isEmpty) return;
 
         // ★ 解決第 3 點：直接記錄真實座標！絕對不強制 clamp 拉回邊緣！
-        _currentPoints.add(PointVector(scenePoint.dx, scenePoint.dy, pressure));
+        // 過濾抖動：和上一點相距不到 0.5 螢幕像素就略過 (放大後慢慢移動時，
+        // 感測器雜訊會讓輪廓出現尖刺)。門檻用螢幕像素換算，所以任何縮放都一致。
+        final last = _currentPoints.last;
+        final minStep = 0.5 / (zoomPercentage / 100);
+        final dx = scenePoint.dx - last.x;
+        final dy = scenePoint.dy - last.y;
+        if (dx * dx + dy * dy < minStep * minStep) return;
+        // 壓力做輕度平滑，粗細才不會忽粗忽細
+        _smoothedPressure += (pressure - _smoothedPressure) * 0.5;
+        _currentPoints.add(
+          PointVector(scenePoint.dx, scenePoint.dy, _smoothedPressure),
+        );
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.eraser) {

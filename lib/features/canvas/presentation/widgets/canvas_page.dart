@@ -321,7 +321,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
                                               style: TextStyle(
-                                                fontSize: 16,
+                                                fontSize: 12,
                                                 fontWeight: isActive
                                                     ? FontWeight.bold
                                                     : FontWeight.normal,
@@ -590,12 +590,12 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                   onPointerDown: (e) => _controller.onPointerDown(
                     e.pointer,
                     e.localPosition,
-                    e.pressure == 0 ? 0.5 : e.pressure,
+                    _normalizedPressure(e),
                   ),
                   onPointerMove: (e) => _controller.onPointerMove(
                     e.pointer,
                     e.localPosition,
-                    e.pressure == 0 ? 0.5 : e.pressure,
+                    _normalizedPressure(e),
                   ),
                   onPointerSignal: (e) {
                     // 滑鼠滾輪 / 觸控板：連續捲動模式下用來捲動頁面
@@ -798,6 +798,14 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
 
   /// 頁面清單按鈕：列出所有頁面，點選即跳轉
   /// 頁面背景 (紙張顏色 / 格線)：可改目前頁或所有空白頁
+  /// 壓力正規化到 0~1。Apple Pencil 等裝置的壓力範圍不是 0~1，
+  /// 直接餵給筆刷會讓筆劃忽粗忽細；沒有壓力資訊 (滑鼠 / 手指) 用 0.5。
+  double _normalizedPressure(PointerEvent e) {
+    final range = e.pressureMax - e.pressureMin;
+    if (e.pressure == 0 || range <= 0) return 0.5;
+    return ((e.pressure - e.pressureMin) / range).clamp(0.0, 1.0).toDouble();
+  }
+
   /// 標籤標題外層：平均分配寬度時吃滿剩餘空間 (× 靠右)，否則維持內容寬度
   Widget _tabTitleSlot({required bool fill, required Widget child}) =>
       fill ? Expanded(child: child) : child;
