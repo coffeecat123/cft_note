@@ -321,7 +321,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
                                               style: TextStyle(
-                                                fontSize: 12,
+                                                fontSize: 16,
                                                 fontWeight: isActive
                                                     ? FontWeight.bold
                                                     : FontWeight.normal,
