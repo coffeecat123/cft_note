@@ -118,9 +118,9 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     return Scaffold(
       backgroundColor: colors.workspace,
 
-      // 頂部雙層 Bar (標籤列 38px + 工具列 50px)
+      // 頂部雙層 Bar (標籤列 48px + 工具列 50px)
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(88),
+        preferredSize: const Size.fromHeight(98),
         child: Container(
           color: colors.tabBar, // 與標籤列相同的背景色，向上延伸覆蓋
           child: SafeArea(
@@ -132,15 +132,16 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                 // 1. 頂部多標籤頁列 (Tab Bar) - 已移除 + 號
                 // ==========================================
                 Container(
-                  height: 38,
+                  height: 48,
                   color: colors.tabBar,
                   child: Row(
                     children: [
                       // 返回首頁書架
+                      // 與下方工具列按鈕同大：圖示 20、點擊範圍 48 (預設)
                       IconButton(
+                        iconSize: 20,
                         icon: Icon(
                           Icons.home_outlined,
-                          size: 20,
                           color: cs.onSurface,
                         ),
                         tooltip: s.backToShelf,
@@ -164,8 +165,15 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                               PointerDeviceKind.trackpad,
                             },
                           ),
-                          child: ReorderableListView.builder(
+                          // 放得下就平均分配寬度；放不下就維持原本寬度並可橫向捲動
+                          child: LayoutBuilder(builder: (context, box) {
+                            const double tabSlot = 104; // 最小寬度 100 + 右邊距 4
+                            final int tabCount = _controller.openNotebooks.length;
+                            final bool fill = tabCount > 0 &&
+                                tabCount * tabSlot <= box.maxWidth;
+                            return ReorderableListView.builder(
                             scrollDirection: Axis.horizontal,
+                            itemExtent: fill ? box.maxWidth / tabCount : null,
                             // 拖曳結束時觸發排序並存檔
                             onReorderItem: (oldIndex, newIndex) {
                               _controller.reorderTabs(oldIndex, newIndex);
@@ -190,14 +198,61 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                     8,
                                     animValue,
                                   )!;
-                                  return Material(
-                                    elevation: elevation,
-                                    color: Colors.transparent,
-                                    shadowColor: Colors.black.withAlpha(90),
-                                    borderRadius: const BorderRadius.vertical(
-                                      top: Radius.circular(8),
-                                    ),
-                                    child: child,
+                                  // 拖曳時被拖的項目包含右邊 / 上方的間距 (margin)，
+                                  // 所以陰影與邊框都用 Positioned 縮進 margin，
+                                  // 只貼合「標籤本體」。
+                                  const tabRadius = BorderRadius.vertical(
+                                    top: Radius.circular(8),
+                                  );
+                                  final bool dark =
+                                      cs.brightness == Brightness.dark;
+                                  return Stack(
+                                    clipBehavior: Clip.none,
+                                    // passthrough：沿用列表給的限制，標籤才會維持滿高
+                                    // (預設 loose 會讓標籤縮成內容高度，下半部變空)
+                                    fit: StackFit.passthrough,
+                                    children: [
+                                      // 陰影 (在標籤後面)
+                                      Positioned.fill(
+                                        top: 4,
+                                        right: 4,
+                                        child: Material(
+                                          elevation: elevation,
+                                          color: Colors.transparent,
+                                          shadowColor:
+                                              Colors.black.withAlpha(90),
+                                          borderRadius: tabRadius,
+                                        ),
+                                      ),
+                                      // 透明 Material：拖曳中的標籤裡有 InkWell (×)，
+                                      // 需要 Material 祖先才能繪製
+                                      Material(
+                                        type: MaterialType.transparency,
+                                        child: child!,
+                                      ),
+                                      // 深色主題：標籤列近黑，黑色陰影看不出來，
+                                      // 所以拖曳中再加「提亮 + 亮色邊框」讓它浮起來
+                                      if (dark)
+                                        Positioned.fill(
+                                          top: 4,
+                                          right: 4,
+                                          child: IgnorePointer(
+                                            child: DecoratedBox(
+                                              decoration: BoxDecoration(
+                                                color: Colors.white.withAlpha(
+                                                  (animValue * 24).round(),
+                                                ),
+                                                border: Border.all(
+                                                  color: cs.outline.withAlpha(
+                                                    (animValue * 220).round(),
+                                                  ),
+                                                ),
+                                                borderRadius: tabRadius,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
                                   );
                                 },
                                 child: child,
@@ -246,18 +301,20 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                         : null,
                                   ),
                                   child: Row(
-                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisSize: fill
+                                        ? MainAxisSize.max
+                                        : MainAxisSize.min,
                                     mainAxisAlignment:
                                         MainAxisAlignment.spaceBetween,
                                     children: [
-                                      Row(
+                                      _tabTitleSlot(
+                                        fill: fill,
+                                        child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           const SizedBox(width: 6),
-                                          ConstrainedBox(
-                                            constraints: const BoxConstraints(
-                                              maxWidth: 120,
-                                            ),
+                                          _tabTitleBox(
+                                            fill: fill,
                                             child: Text(
                                               nb.title,
                                               maxLines: 1,
@@ -274,6 +331,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                             ),
                                           ),
                                         ],
+                                      ),
                                       ),
                                       const SizedBox(width: 6),
 
@@ -298,7 +356,8 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                 ),
                               );
                             },
-                          ),
+                          );
+                          }),
                         ),
                       ),
                     ],
@@ -724,6 +783,18 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
 
   /// 頁面清單按鈕：列出所有頁面，點選即跳轉
   /// 頁面背景 (紙張顏色 / 格線)：可改目前頁或所有空白頁
+  /// 標籤標題外層：平均分配寬度時吃滿剩餘空間 (× 靠右)，否則維持內容寬度
+  Widget _tabTitleSlot({required bool fill, required Widget child}) =>
+      fill ? Expanded(child: child) : child;
+
+  /// 標題文字：平均分配時隨標籤變寬 (過長才省略)，否則最寬 120
+  Widget _tabTitleBox({required bool fill, required Widget child}) => fill
+      ? Flexible(child: child)
+      : ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 120),
+          child: child,
+        );
+
   Widget _buildPageBackgroundButton() {
     return IconButton(
       icon: Icon(Icons.grid_on_rounded, size: 20, color: context.appColors.toolbarIcon),
