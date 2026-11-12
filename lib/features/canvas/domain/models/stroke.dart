@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:perfect_freehand/perfect_freehand.dart';
 import '../../../../core/algorithms/segment_math.dart';
 import 'brush_settings.dart';
+import 'stroke_geometry.dart';
 
 /// perfect_freehand 給的輪廓是一圈「多邊形頂點」，直接 lineTo 連起來會是很多條直線拼成的
 /// (放大後看得到稜角、轉彎處有尖刺)。改成官方建議的畫法：
@@ -104,18 +105,8 @@ class Stroke {
 
   Path _buildOutline() {
     if (points.isEmpty) return Path();
-    final outline = getStroke(
-      points,
-      options: StrokeOptions(
-        size: settings.size,
-        thinning: settings.thinning,
-        smoothing: settings.smoothing,
-        streamline: settings.streamline,
-        simulatePressure: false,
-        isComplete: true, // 已完成的筆劃：收尾要畫完整，不留「還在書寫」的尾巴
-      ),
-    );
-    return smoothOutlinePath(outline);
+    // 與預覽共用 StrokeGeometry：圓 + 連接塊的聯集，無缺口、放開筆時外觀不會跳
+    return StrokeGeometry.pathFor(points, settings);
   }
 
   // ------------------------------------------------------------

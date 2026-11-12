@@ -2,9 +2,8 @@
 import 'dart:math';
 import 'package:cft_note/features/canvas/domain/models/tools.dart';
 import 'package:flutter/material.dart';
-import 'package:perfect_freehand/perfect_freehand.dart';
 import '../../../document/domain/page_background.dart';
-import '../../domain/models/stroke.dart';
+import '../../domain/models/stroke_geometry.dart';
 import '../controllers/canvas_controller.dart';
 
 class HistoryLayerPainter extends CustomPainter {
@@ -172,25 +171,17 @@ class ActiveLayerPainter extends CustomPainter {
 
     // 正在書寫的筆劃
     if (controller.currentPoints.isNotEmpty) {
-      final outlinePoints = getStroke(
+      final strokePath = StrokeGeometry.pathFor(
         controller.currentPoints,
-        options: StrokeOptions(
-          size: controller.brush.size,
-          thinning: controller.brush.thinning,
-          smoothing: controller.brush.smoothing,
-          streamline: controller.brush.streamline,
-          simulatePressure: false,
-        ),
+        controller.brush,
       );
 
       final paint = Paint()
         ..color = controller.strokeColor
         ..style = PaintingStyle.fill;
 
-      if (outlinePoints.isNotEmpty) {
-        // 與完成後的筆劃共用同一個平滑函式，放開筆時外觀不會跳
-        canvas.drawPath(smoothOutlinePath(outlinePoints), paint);
-      }
+      // 與完成後的筆劃共用同一個產生器，放開筆時外觀不會跳
+      canvas.drawPath(strokePath, paint);
     }
 
     // 正在畫的套索

@@ -5,6 +5,7 @@ import 'package:perfect_freehand/perfect_freehand.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/i18n/app_strings.dart';
 import '../../domain/models/brush_settings.dart';
+import '../../domain/models/stroke_geometry.dart';
 import '../controllers/canvas_controller.dart';
 
 class BrushSettingsSheet extends StatefulWidget {
@@ -244,30 +245,13 @@ class _BrushPreviewPainter extends CustomPainter {
       points.add(PointVector(x, y, pressure));
     }
 
-    final outlinePoints = getStroke(
-      points,
-      options: StrokeOptions(
-        size: settings.size,
-        thinning: settings.thinning,
-        smoothing: settings.smoothing,
-        streamline: settings.streamline,
-        simulatePressure: false,
-      ),
-    );
+    final strokePath = StrokeGeometry.pathFor(points, settings);
 
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.fill;
 
-    final path = Path();
-    if (outlinePoints.isNotEmpty) {
-      path.moveTo(outlinePoints.first.dx, outlinePoints.first.dy);
-      for (int i = 1; i < outlinePoints.length; i++) {
-        path.lineTo(outlinePoints[i].dx, outlinePoints[i].dy);
-      }
-      path.close();
-      canvas.drawPath(path, paint);
-    }
+    canvas.drawPath(strokePath, paint);
   }
 
   @override

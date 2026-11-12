@@ -1,5 +1,4 @@
 // lib/features/shelf/presentation/controllers/shelf_controller.dart
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
 import '../../../../core/i18n/app_strings.dart';
 import '../../../canvas/domain/models/canvas_prefs.dart';

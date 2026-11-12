@@ -3,9 +3,9 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' show Color, Offset, Rect, Size; // 使用原生 Offset / Rect / Size / Color
 import 'package:file_picker/file_picker.dart';
-import 'package:perfect_freehand/perfect_freehand.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import '../../../core/i18n/app_strings.dart';
+import '../../canvas/domain/models/stroke_geometry.dart';
 import '../../document/data/page_image_store.dart';
 import '../../document/domain/page_background.dart';
 import '../../shelf/domain/models/notebook.dart';
@@ -94,18 +94,14 @@ class PdfExportService {
         // 2. 向量筆跡疊加：使用 drawPolygon 直接注入多邊形向量曲線
         // ============================================================
         for (final stroke in page.strokes) {
-          final outlinePoints = getStroke(
+          // 與畫面相同的取樣 (PDF 取樣稍疏以控制檔案大小)
+          final samples = StrokeGeometry.sample(
             stroke.points,
-            options: StrokeOptions(
-              size: stroke.settings.size,
-              thinning: stroke.settings.thinning,
-              smoothing: stroke.settings.smoothing,
-              streamline: stroke.settings.streamline,
-              simulatePressure: false,
-            ),
+            stroke.settings,
+            stepScale: 1.5,
           );
 
-          if (outlinePoints.length >= 3) {
+          if (samples.isNotEmpty) {
             // ★ 修正 2：符合 Flutter 3.27+ 色彩標準，消除 red/green/blue 棄用警告
             final color = stroke.color;
             final r = (color.r * 255.0).round().clamp(0, 255);
@@ -115,10 +111,19 @@ class PdfExportService {
             final pdfColor = PdfColor(r, g, b, a);
 
             // ★ 修正 1：直接呼叫 drawPolygon 畫入向量多邊形 (徹底告別 PdfPath 與 moveTo 錯誤)
-            graphics.drawPolygon(
-              outlinePoints,
-              brush: PdfSolidBrush(pdfColor),
-            );
+            // 圓 + 連接塊逐一填色，疊起來就是完整筆劃 (無缺口)
+            final brush = PdfSolidBrush(pdfColor);
+            for (int i = 0; i < samples.length; i++) {
+              final a = samples[i];
+              graphics.drawEllipse(
+                Rect.fromCircle(center: Offset(a.x, a.y), radius: a.r),
+                brush: brush,
+              );
+              if (i + 1 < samples.length) {
+                final quad = StrokeGeometry.segmentQuad(a, samples[i + 1]);
+                if (quad != null) graphics.drawPolygon(quad, brush: brush);
+              }
+            }
           }
         }
       }
