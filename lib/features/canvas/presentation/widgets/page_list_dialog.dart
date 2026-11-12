@@ -8,6 +8,9 @@ import 'dart:ui' as ui;
 import 'package:cft_note/features/document/domain/note_page.dart';
 import 'package:flutter/material.dart';
 
+import '../../../../app/theme/app_theme.dart';
+import '../../../../core/i18n/app_strings.dart';
+import '../../../document/domain/page_background.dart';
 import '../../../pdf_import_export/services/pdf_service.dart';
 import '../controllers/canvas_controller.dart';
 
@@ -96,7 +99,7 @@ class _PageListDialogState extends State<PageListDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      '所有頁面 (共 ${pages.length} 頁)',
+                      S.of(context).allPagesTitle(pages.length),
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
@@ -196,10 +199,10 @@ class _PageListDialogState extends State<PageListDialog> {
             height: thumbBoxH,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: Colors.grey[200],
+              color: context.cs.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: isCurrent ? Colors.blueAccent : Colors.grey[300]!,
+                color: isCurrent ? Colors.blueAccent : context.cs.outlineVariant,
                 width: isCurrent ? 2.5 : 1,
               ),
             ),
@@ -236,7 +239,7 @@ class _PageListDialogState extends State<PageListDialog> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: isCurrent ? FontWeight.w700 : FontWeight.normal,
-                  color: isCurrent ? Colors.blueAccent : Colors.black87,
+                  color: isCurrent ? Colors.blueAccent : context.cs.onSurface,
                 ),
               ),
             ),
@@ -247,17 +250,20 @@ class _PageListDialogState extends State<PageListDialog> {
   }
 }
 
-/// 單頁縮圖：白紙 + 底圖 (或空白頁橫線) + 筆劃，整體等比縮小
+/// 單頁縮圖：紙張 + 底圖 (或空白頁格線) + 筆劃，整體等比縮小
 class _PageThumbPainter extends CustomPainter {
   final NotePage page;
   final ui.Image? bg;
   final int strokeCount;
 
+  /// 建立時的背景快照 (page 是同一個物件，單靠 page 比較偵測不到背景改變)
+  final PageBackground background;
+
   _PageThumbPainter({
     required this.page,
     required this.bg,
     required this.strokeCount,
-  });
+  }) : background = page.background;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -268,7 +274,11 @@ class _PageThumbPainter extends CustomPainter {
     canvas.clipRect(Offset.zero & size);
     canvas.scale(size.width / page.width, size.height / page.height);
 
-    canvas.drawRect(pageRect, Paint()..color = Colors.white);
+    final bool isBlank = page.isBlank;
+    canvas.drawRect(
+      pageRect,
+      Paint()..color = isBlank ? background.color : Colors.white,
+    );
 
     final image = bg;
     if (image != null) {
@@ -278,13 +288,13 @@ class _PageThumbPainter extends CustomPainter {
         pageRect,
         Paint()..filterQuality = FilterQuality.medium,
       );
-    } else {
-      final linePaint = Paint()
-        ..color = Colors.grey.withAlpha(60)
-        ..strokeWidth = 2.0;
-      for (double y = 40; y < page.height; y += 32) {
-        canvas.drawLine(Offset(20, y), Offset(page.width - 20, y), linePaint);
-      }
+    } else if (isBlank) {
+      PageBackgroundPainter.paintGrid(
+        canvas,
+        Size(page.width, page.height),
+        background,
+        strokeWidth: 2.0, // 縮圖縮小很多，線條加粗才看得到
+      );
     }
 
     canvas.clipRect(pageRect);
@@ -298,5 +308,8 @@ class _PageThumbPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _PageThumbPainter old) =>
-      old.page != page || old.bg != bg || old.strokeCount != strokeCount;
+      old.page != page ||
+      old.bg != bg ||
+      old.strokeCount != strokeCount ||
+      old.background != background;
 }

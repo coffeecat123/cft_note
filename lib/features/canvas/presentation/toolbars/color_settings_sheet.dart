@@ -1,5 +1,8 @@
 // lib/features/canvas/presentation/toolbars/color_settings_sheet.dart
 import 'package:flutter/material.dart';
+
+import '../../../../app/theme/app_theme.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../controllers/canvas_controller.dart';
 
 // ==========================================
@@ -85,7 +88,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
 
   String get _hexCode {
     final c = _currentColor;
-    return '#${(c.value & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+    return '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
   }
 
   void _applyColor(Color color) {
@@ -100,11 +103,12 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
 
   // ★ 解決第 4 點：刪除前二次確認對話框
   void _confirmDeleteColor(BuildContext context, Color color) {
+    final s = S.of(context);
     showDialog(
       context: context,
       builder: (dialogCtx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('刪除收藏顏色', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        title: Text(s.removeFavoriteTitle, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         content: Row(
           children: [
             Container(
@@ -117,13 +121,13 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
               ),
             ),
             const SizedBox(width: 12),
-            const Text('確定要從喜愛清單中移除此顏色？'),
+            Flexible(child: Text(s.removeFavoriteMessage)),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('取消', style: TextStyle(color: Colors.grey)),
+            child: Text(s.cancel, style: const TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -136,7 +140,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
               Navigator.pop(dialogCtx);
               setState(() {});
             },
-            child: const Text('確定刪除'),
+            child: Text(s.confirmRemove),
           ),
         ],
       ),
@@ -145,6 +149,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     final sGradient = LinearGradient(colors: [
       HSVColor.fromAHSV(1.0, _hue, 0.0, _brightness).toColor(),
       HSVColor.fromAHSV(1.0, _hue, 1.0, _brightness).toColor(),
@@ -170,9 +175,9 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.9,
       ),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      decoration: BoxDecoration(
+        color: context.cs.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: SafeArea(
         top: false,
@@ -185,7 +190,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
               child: Container(
                 width: 40,
                 height: 4,
-                decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+                decoration: BoxDecoration(color: context.cs.outlineVariant, borderRadius: BorderRadius.circular(2)),
               ),
             ),
             const SizedBox(height: 8),
@@ -200,7 +205,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
                     // 頂部列：標題 + 當前大顏色圓圈
                     Row(
                       children: [
-                        const Text('色彩工作台', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        Text(s.colorStudio, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                         const Spacer(),
                         Container(
                           width: 38,
@@ -234,7 +239,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
 
                     // 1. H 滑桿
                     _buildSliderRow(
-                      label: 'H (色相)',
+                      label: s.hueLabel,
                       gradient: hGradient,
                       value: _hue,
                       min: 0,
@@ -250,7 +255,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
 
                     // 2. S 滑桿
                     _buildSliderRow(
-                      label: 'S (彩度)',
+                      label: s.saturationLabel,
                       gradient: sGradient,
                       value: _saturation,
                       min: 0.0,
@@ -266,7 +271,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
 
                     // 3. B 滑桿
                     _buildSliderRow(
-                      label: 'B (明度)',
+                      label: s.brightnessLabel,
                       gradient: bGradient,
                       value: _brightness,
                       min: 0.0,
@@ -284,11 +289,11 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
                     // 喜愛的顏色
                     Row(
                       children: [
-                        const Text('喜愛的顏色 (長按刪除)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                        Text(s.favoriteColors, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
                         const Spacer(),
                         TextButton.icon(
                           icon: const Icon(Icons.bookmark_add_outlined, size: 16),
-                          label: const Text('收藏當前色', style: TextStyle(fontSize: 12)),
+                          label: Text(s.saveCurrentColor, style: const TextStyle(fontSize: 12)),
                           onPressed: () {
                             widget.controller.addFavoriteColor(_currentColor);
                             setState(() {});
@@ -315,7 +320,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
                     const Divider(height: 24),
 
                     // 最近使用的顏色
-                    const Text('最近使用 (畫過自動收錄)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                    Text(s.recentColors, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 10,
@@ -345,15 +350,15 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
       width: width,
       padding: const EdgeInsets.symmetric(vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.grey[100],
+        color: context.cs.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.grey[300]!),
+        border: Border.all(color: context.cs.outlineVariant),
       ),
       child: Column(
         children: [
           Text(label, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.grey)),
           const SizedBox(height: 1),
-          Text(value, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.black87)),
+          Text(value, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: context.cs.onSurface)),
         ],
       ),
     );
@@ -373,7 +378,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
     return Row(
       children: [
         SizedBox(
-          width: 55,
+          width: 92,
           child: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
         ),
         Expanded(
@@ -414,7 +419,7 @@ class _ColorSettingsSheetState extends State<ColorSettingsSheet> {
         color: color,
         shape: BoxShape.circle,
         border: Border.all(
-          color: isSelected ? Colors.blueAccent : Colors.grey[300]!,
+          color: isSelected ? Colors.blueAccent : context.cs.outlineVariant,
           width: isSelected ? 3 : 1.5,
         ),
         boxShadow: isSelected

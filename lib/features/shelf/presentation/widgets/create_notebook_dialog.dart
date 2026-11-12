@@ -1,5 +1,7 @@
 // lib/features/shelf/presentation/widgets/create_notebook_dialog.dart
 import 'package:flutter/material.dart';
+import '../../../../app/theme/app_theme.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../../domain/models/notebook.dart';
 
 class CreateNotebookDialog extends StatefulWidget {
@@ -22,9 +24,10 @@ class _CreateNotebookDialogState extends State<CreateNotebookDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('新增筆記本', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+      title: Text(s.newNotebook, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -34,17 +37,17 @@ class _CreateNotebookDialogState extends State<CreateNotebookDialog> {
             TextField(
               controller: _titleController,
               autofocus: true,
-              decoration: const InputDecoration(
-                labelText: '筆記本名稱',
-                hintText: '未命名筆記',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: s.notebookName,
+                hintText: s.untitledNotebook,
+                border: const OutlineInputBorder(),
                 isDense: true,
               ),
             ),
             const SizedBox(height: 20),
 
             // 封面顏色挑選
-            const Text('選擇封面顏色', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87)),
+            Text(s.chooseCoverColor, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: context.cs.onSurface)),
             const SizedBox(height: 12),
             Wrap(
               spacing: 12,
@@ -60,7 +63,7 @@ class _CreateNotebookDialogState extends State<CreateNotebookDialog> {
                       color: color,
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: isSelected ? Colors.blueAccent : Colors.grey[300]!,
+                        color: isSelected ? Colors.blueAccent : context.cs.outlineVariant,
                         width: isSelected ? 3 : 1.5,
                       ),
                     ),
@@ -75,7 +78,7 @@ class _CreateNotebookDialogState extends State<CreateNotebookDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('取消', style: TextStyle(color: Colors.grey)),
+          child: Text(s.cancel, style: const TextStyle(color: Colors.grey)),
         ),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
@@ -90,7 +93,7 @@ class _CreateNotebookDialogState extends State<CreateNotebookDialog> {
             ));
             Navigator.pop(context);
           },
-          child: const Text('建立'),
+          child: Text(s.create),
         ),
       ],
     );

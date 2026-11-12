@@ -1,5 +1,7 @@
 // lib/features/shelf/presentation/widgets/notebook_card.dart
 import 'package:flutter/material.dart';
+import '../../../../app/theme/app_theme.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../../domain/models/notebook.dart';
 
 class NotebookCard extends StatelessWidget {
@@ -22,6 +24,7 @@ class NotebookCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return GestureDetector(
       onTap: onTap,
       child: Column(
@@ -121,12 +124,16 @@ class NotebookCard extends StatelessWidget {
                       notebook.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: context.cs.onSurface),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${notebook.pageCount} 頁 (第 ${notebook.lastViewedPageIndex + 1} 頁) • ${_formatDate(notebook.updatedAt)}',
-                      style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                      s.notebookSubtitle(
+                        notebook.pageCount,
+                        notebook.lastViewedPageIndex + 1,
+                        _formatDate(s, notebook.updatedAt),
+                      ),
+                      style: TextStyle(fontSize: 10, color: context.cs.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -141,7 +148,7 @@ class NotebookCard extends StatelessWidget {
                   if (val == 'delete') onDelete();
                   if (val == 'export') onExport();
                 },
-                itemBuilder: (ctx) => menuItems(),
+                itemBuilder: (ctx) => menuItems(s),
               ),
             ],
           ),
@@ -151,54 +158,54 @@ class NotebookCard extends StatelessWidget {
   }
 
   /// 選單項目 (清單模式的列也共用)
-  static List<PopupMenuEntry<String>> menuItems() => [
-          const PopupMenuItem(
+  static List<PopupMenuEntry<String>> menuItems(S s) => [
+          PopupMenuItem(
             value: 'export',
             child: Row(
               children: [
-                Icon(Icons.picture_as_pdf_outlined, size: 18, color: Colors.blueAccent),
-                SizedBox(width: 8),
-                Text('匯出為 PDF', style: TextStyle(fontSize: 13, color: Colors.blueAccent)),
+                const Icon(Icons.picture_as_pdf_outlined, size: 18, color: Colors.blueAccent),
+                const SizedBox(width: 8),
+                Text(s.exportAsPdf, style: const TextStyle(fontSize: 13, color: Colors.blueAccent)),
               ],
             ),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'rename',
             child: Row(
               children: [
-                Icon(Icons.edit_outlined, size: 18),
-                SizedBox(width: 8),
-                Text('重新命名', style: TextStyle(fontSize: 13)),
+                const Icon(Icons.edit_outlined, size: 18),
+                const SizedBox(width: 8),
+                Text(s.rename, style: const TextStyle(fontSize: 13)),
               ],
             ),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'duplicate',
             child: Row(
               children: [
-                Icon(Icons.copy_outlined, size: 18),
-                SizedBox(width: 8),
-                Text('製作副本', style: TextStyle(fontSize: 13)),
+                const Icon(Icons.copy_outlined, size: 18),
+                const SizedBox(width: 8),
+                Text(s.duplicate, style: const TextStyle(fontSize: 13)),
               ],
             ),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'delete',
             child: Row(
               children: [
-                Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
-                SizedBox(width: 8),
-                Text('刪除', style: TextStyle(fontSize: 13, color: Colors.redAccent)),
+                const Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                const SizedBox(width: 8),
+                Text(s.delete, style: const TextStyle(fontSize: 13, color: Colors.redAccent)),
               ],
             ),
           ),
   ];
 
-  String _formatDate(DateTime dt) {
+  String _formatDate(S s, DateTime dt) {
     final now = DateTime.now();
     final diff = now.difference(dt);
-    if (diff.inMinutes < 60) return '${diff.inMinutes} 分鐘前';
-    if (diff.inHours < 24) return '${diff.inHours} 小時前';
+    if (diff.inMinutes < 60) return s.minutesAgo(diff.inMinutes);
+    if (diff.inHours < 24) return s.hoursAgo(diff.inHours);
     return '${dt.month}/${dt.day}';
   }
 }

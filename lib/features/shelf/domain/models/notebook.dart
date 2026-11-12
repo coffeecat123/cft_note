@@ -1,5 +1,6 @@
 // lib/features/shelf/domain/models/notebook.dart
 import 'package:flutter/material.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../../../document/domain/note_page.dart';
 
 class Notebook {
@@ -57,7 +58,10 @@ class Notebook {
 
   /// 建立「副本」：新 id、所有頁面與筆劃深層複製，之後兩本互不影響。
   Notebook duplicate({String? title}) =>
-      copyWith(id: generateId(), title: title ?? '${this.title} (副本)');
+      copyWith(
+        id: generateId(),
+        title: title ?? '${this.title} ${S.current.copySuffix}',
+      );
 
   Map<String, dynamic> toJson() => {
     'id': id,

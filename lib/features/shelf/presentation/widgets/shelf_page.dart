@@ -1,7 +1,11 @@
 // lib/features/shelf/presentation/widgets/shelf_page.dart
 import 'package:cft_note/features/pdf_import_export/services/pdf_export_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../../../app/settings/settings_dialog.dart';
+import '../../../../app/theme/app_theme.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../../../canvas/presentation/widgets/canvas_page.dart';
 import '../../domain/models/note_folder.dart';
 import '../../domain/models/notebook.dart';
@@ -77,19 +81,23 @@ class _ShelfPageState extends State<ShelfPage> {
     final direct = _controller.folderContents(folder.id);
     final all = _controller.folderContents(folder.id, recursive: true);
     final isEmpty = all.notebooks == 0 && all.folders == 0;
+    final s = S.of(context);
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('刪除資料夾'),
+        title: Text(s.deleteFolder),
         content: Text(
           isEmpty
-              ? '確定要刪除空資料夾「${folder.name}」嗎？'
-              : '刪除「${folder.name}」後，裡面的 ${direct.notebooks} 本筆記本'
-                    '與 ${direct.folders} 個子資料夾會移到上一層，不會被刪除。',
+              ? s.confirmDeleteEmptyFolder(folder.name)
+              : s.deleteFolderMovesContents(
+                  folder.name,
+                  direct.notebooks,
+                  direct.folders,
+                ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.cancel)),
           if (!isEmpty)
             TextButton(
               style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
@@ -97,14 +105,14 @@ class _ShelfPageState extends State<ShelfPage> {
                 Navigator.pop(ctx);
                 _confirmDeleteFolderWithContents(folder, all);
               },
-              child: const Text('連同內容刪除…'),
+              child: Text(s.deleteWithContents),
             ),
           ElevatedButton(
             onPressed: () {
               _controller.deleteFolder(folder.id);
               Navigator.pop(ctx);
             },
-            child: Text(isEmpty ? '刪除' : '刪除資料夾'),
+            child: Text(isEmpty ? s.delete : s.deleteFolder),
           ),
         ],
       ),
@@ -115,16 +123,16 @@ class _ShelfPageState extends State<ShelfPage> {
     NoteFolder folder,
     ({int notebooks, int folders}) all,
   ) {
+    final s = S.of(context);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('連同內容一併刪除？'),
+        title: Text(s.deleteWithContentsTitle),
         content: Text(
-          '將永久刪除「${folder.name}」以及其中的 ${all.notebooks} 本筆記本'
-          '與 ${all.folders} 個子資料夾，無法復原。',
+          s.permanentlyDeleteFolder(folder.name, all.notebooks, all.folders),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.cancel)),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.redAccent,
@@ -134,7 +142,7 @@ class _ShelfPageState extends State<ShelfPage> {
               _controller.deleteFolder(folder.id, deleteContents: true);
               Navigator.pop(ctx);
             },
-            child: const Text('永久刪除'),
+            child: Text(s.deletePermanently),
           ),
         ],
       ),
@@ -143,30 +151,31 @@ class _ShelfPageState extends State<ShelfPage> {
 
   void _showCreateFolderDialog() {
     final textController = TextEditingController();
+    final s = S.of(context);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text(
-          '新增資料夾',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        title: Text(
+          s.newFolder,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         content: TextField(
           controller: textController,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '資料夾名稱',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            hintText: s.folderName,
+            border: const OutlineInputBorder(),
             isDense: true,
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.cancel)),
           ElevatedButton(
             onPressed: () {
               _controller.createFolder(textController.text);
               Navigator.pop(ctx);
             },
-            child: const Text('建立'),
+            child: Text(s.create),
           ),
         ],
       ),
@@ -180,13 +189,14 @@ class _ShelfPageState extends State<ShelfPage> {
     required void Function(String) onSubmit,
   }) {
     final textController = TextEditingController(text: initial);
+    final s = S.of(context);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(title),
         content: TextField(controller: textController, autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.cancel)),
           ElevatedButton(
             onPressed: () {
               onSubmit(textController.text);
@@ -200,27 +210,28 @@ class _ShelfPageState extends State<ShelfPage> {
   }
 
   void _renameFolder(NoteFolder folder) => _showRenameDialog(
-    title: '重新命名資料夾',
+    title: S.of(context).renameFolder,
     initial: folder.name,
-    confirmLabel: '儲存',
+    confirmLabel: S.of(context).save,
     onSubmit: (v) => _controller.renameFolder(folder.id, v),
   );
 
   void _renameNotebook(Notebook nb) => _showRenameDialog(
-    title: '重新命名',
+    title: S.of(context).rename,
     initial: nb.title,
-    confirmLabel: '確認',
+    confirmLabel: S.of(context).confirm,
     onSubmit: (v) => _controller.renameNotebook(nb.id, v),
   );
 
   void _showDeleteNotebookDialog(Notebook notebook) {
+    final s = S.of(context);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('刪除筆記本'),
-        content: Text('確定要刪除「${notebook.title}」嗎？'),
+        title: Text(s.deleteNotebook),
+        content: Text(s.confirmDeleteNotebook(notebook.title)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.cancel)),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.redAccent,
@@ -230,7 +241,7 @@ class _ShelfPageState extends State<ShelfPage> {
               _controller.deleteNotebook(notebook.id);
               Navigator.pop(ctx);
             },
-            child: const Text('刪除'),
+            child: Text(s.delete),
           ),
         ],
       ),
@@ -238,16 +249,17 @@ class _ShelfPageState extends State<ShelfPage> {
   }
 
   Future<void> _exportNotebook(Notebook notebook) async {
+    final s = S.of(context);
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('正在合成向量 PDF...'),
-        duration: Duration(seconds: 1),
+      SnackBar(
+        content: Text(s.exportingPdf),
+        duration: const Duration(seconds: 1),
       ),
     );
     final success = await PdfExportService.exportNotebook(notebook);
     if (success && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('PDF 匯出成功！')),
+        SnackBar(content: Text(s.pdfExported)),
       );
     }
   }
@@ -276,7 +288,7 @@ class _ShelfPageState extends State<ShelfPage> {
     return Material(
       elevation: 8,
       borderRadius: BorderRadius.circular(10),
-      color: Colors.white,
+      color: context.cs.surfaceContainerHigh,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
@@ -294,10 +306,10 @@ class _ShelfPageState extends State<ShelfPage> {
                 item.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  color: Colors.black87,
+                  color: context.cs.onSurface,
                 ),
               ),
             ),
@@ -320,7 +332,7 @@ class _ShelfPageState extends State<ShelfPage> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text('已將「${item.name}」移到「$targetName」'),
+          content: Text(S.of(context).movedTo(item.name, targetName)),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -353,11 +365,11 @@ class _ShelfPageState extends State<ShelfPage> {
 
   String get _parentName {
     final pid = _parentId;
-    if (pid == null) return '我的筆記櫃';
+    if (pid == null) return S.of(context).myShelf;
     for (final f in _controller.folders) {
       if (f.id == pid) return f.name;
     }
-    return '我的筆記櫃';
+    return S.of(context).myShelf;
   }
 
   Widget _moveUpTarget(Widget Function(bool hot) builder) {
@@ -375,7 +387,7 @@ class _ShelfPageState extends State<ShelfPage> {
       right: 0,
       child: _moveUpTarget(
         (hot) => Material(
-          color: hot ? Colors.blueAccent : const Color(0xFFE3EDFF),
+          color: hot ? Colors.blueAccent : context.appColors.moveUpBanner,
           elevation: 3,
           child: Container(
             height: 44,
@@ -390,7 +402,7 @@ class _ShelfPageState extends State<ShelfPage> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  '拖到這裡，移到「$_parentName」',
+                  S.of(context).dropHereToMove(_parentName),
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
@@ -428,9 +440,10 @@ class _ShelfPageState extends State<ShelfPage> {
 
   Widget _buildSortButton() {
     final c = _controller;
+    final s = S.of(context);
     return PopupMenuButton<String>(
-      tooltip: '排序方式',
-      icon: const Icon(Icons.sort, color: Colors.black87),
+      tooltip: s.sortBy,
+      icon: Icon(Icons.sort, color: context.cs.onSurface),
       onSelected: (v) {
         switch (v) {
           case 'modified':
@@ -444,22 +457,23 @@ class _ShelfPageState extends State<ShelfPage> {
         }
       },
       itemBuilder: (ctx) => [
-        _checkItem('modified', '修改時間', c.sortKey == ShelfSortKey.modified),
-        _checkItem('name', '名稱', c.sortKey == ShelfSortKey.name),
+        _checkItem('modified', s.modifiedTime, c.sortKey == ShelfSortKey.modified),
+        _checkItem('name', s.name, c.sortKey == ShelfSortKey.name),
         const PopupMenuDivider(),
-        _checkItem('asc', '升序', c.sortAscending),
-        _checkItem('desc', '降序', !c.sortAscending),
+        _checkItem('asc', s.ascending, c.sortAscending),
+        _checkItem('desc', s.descending, !c.sortAscending),
       ],
     );
   }
 
   Widget _buildViewToggle() {
     final isGrid = _controller.viewMode == ShelfViewMode.grid;
+    final s = S.of(context);
     return IconButton(
-      tooltip: isGrid ? '切換為精簡清單' : '切換為小圖示',
+      tooltip: isGrid ? s.switchToList : s.switchToGrid,
       icon: Icon(
         isGrid ? Icons.view_list_rounded : Icons.grid_view_rounded,
-        color: Colors.black87,
+        color: context.cs.onSurface,
       ),
       onPressed: () => _controller.setViewMode(
         isGrid ? ShelfViewMode.list : ShelfViewMode.grid,
@@ -473,11 +487,21 @@ class _ShelfPageState extends State<ShelfPage> {
   @override
   Widget build(BuildContext context) {
     final inFolder = _controller.currentFolderId != null;
+    final s = S.of(context);
+    final cs = context.cs;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF7F8FA),
+    return PopScope(
+      // 手機返回鍵：資料夾內 → 回上一層；首頁 → 二次確認後才離開 App
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _handleBack();
+      },
+      child: Scaffold(
+      backgroundColor: context.appColors.shelfBackground,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: cs.surface,
+        surfaceTintColor: Colors.transparent,
         elevation: 0.5,
         // 返回箭頭也是放置目標：把項目拖到這裡 = 移到上一層
         leading: inFolder
@@ -485,49 +509,54 @@ class _ShelfPageState extends State<ShelfPage> {
                 (hot) => IconButton(
                   icon: Icon(
                     Icons.arrow_back,
-                    color: hot ? Colors.blueAccent : Colors.black87,
+                    color: hot ? Colors.blueAccent : cs.onSurface,
                   ),
                   style: hot
                       ? IconButton.styleFrom(
                           backgroundColor: Colors.blueAccent.withAlpha(40),
                         )
                       : null,
-                  tooltip: '返回上一層',
+                  tooltip: s.backUpOneLevel,
                   onPressed: _controller.exitFolder,
                 ),
               )
             : null,
         title: Text(
-          _controller.currentFolder?.name ?? '我的筆記櫃',
-          style: const TextStyle(
+          _controller.currentFolder?.name ?? s.myShelf,
+          style: TextStyle(
             fontWeight: FontWeight.bold,
             fontSize: 18,
-            color: Colors.black87,
+            color: cs.onSurface,
           ),
         ),
         actions: [
+          // 繼續編輯：只放圖示 + 數量徽章，不佔標題空間 (文字改成長按提示)
           if (_controller.openTabs.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: TextButton.icon(
-                style: TextButton.styleFrom(
-                  backgroundColor: Colors.blue.withAlpha(20),
-                  foregroundColor: Colors.blueAccent,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                ),
-                icon: const Icon(Icons.tab, size: 16),
-                label: Text(
-                  '繼續編輯 (${_controller.openTabs.length})',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                ),
-                onPressed: () {
-                  final target = _controller.openTabs[_controller.activeTabIndex];
-                  _openNotebook(target);
-                },
+            IconButton(
+              tooltip: s.continueEditing(_controller.openTabs.length),
+              style: IconButton.styleFrom(
+                backgroundColor: Colors.blue.withAlpha(20),
+                foregroundColor: Colors.blueAccent,
               ),
+              icon: Badge(
+                label: Text('${_controller.openTabs.length}'),
+                backgroundColor: Colors.blueAccent,
+                child: const Icon(Icons.tab, size: 20),
+              ),
+              onPressed: () {
+                final idx = _controller.activeTabIndex
+                    .clamp(0, _controller.openTabs.length - 1);
+                _openNotebook(_controller.openTabs[idx]);
+              },
             ),
           _buildSortButton(),
           _buildViewToggle(),
+          // ★ 全域設定 (主題 / 語言)
+          IconButton(
+            tooltip: s.settings,
+            icon: Icon(Icons.settings_outlined, color: cs.onSurface),
+            onPressed: () => SettingsDialog.show(context),
+          ),
           const SizedBox(width: 4),
         ],
       ),
@@ -539,7 +568,37 @@ class _ShelfPageState extends State<ShelfPage> {
           if (_dragging && inFolder) _buildMoveUpBanner(),
         ],
       ),
+    ),
     );
+  }
+
+  /// 手機返回鍵：資料夾內 → 回上一層；首頁 → 二次確認後離開 App
+  Future<void> _handleBack() async {
+    if (_controller.currentFolderId != null) {
+      _controller.exitFolder();
+      return;
+    }
+    final s = S.of(context);
+    final exit = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.exitAppTitle),
+        content: Text(s.exitAppMessage),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(s.exit),
+          ),
+        ],
+      ),
+    );
+    if (exit == true) {
+      await SystemNavigator.pop();
+    }
   }
 
   // ==========================================================
@@ -665,7 +724,7 @@ class _ShelfPageState extends State<ShelfPage> {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: active ? Colors.blueAccent : Colors.grey[700],
+                color: active ? Colors.blueAccent : context.cs.onSurfaceVariant,
               ),
             ),
           ),
@@ -691,15 +750,15 @@ class _ShelfPageState extends State<ShelfPage> {
     return Container(
       height: 34,
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F3F6),
-        border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+        color: context.cs.surfaceContainerHighest,
+        border: Border(bottom: BorderSide(color: context.cs.outlineVariant)),
       ),
       child: Row(
         children: [
           const SizedBox(width: ShelfListRow.iconWidth),
-          cell('名稱', key: ShelfSortKey.name),
-          cell('修改時間', key: ShelfSortKey.modified, width: ShelfListRow.modifiedWidth),
-          if (showInfo) cell('內容', width: ShelfListRow.infoWidth),
+          cell(S.of(context).name, key: ShelfSortKey.name),
+          cell(S.of(context).modifiedTime, key: ShelfSortKey.modified, width: ShelfListRow.modifiedWidth),
+          if (showInfo) cell(S.of(context).info, width: ShelfListRow.infoWidth),
           const SizedBox(width: ShelfListRow.menuWidth),
         ],
       ),
@@ -712,7 +771,7 @@ class _ShelfPageState extends State<ShelfPage> {
       leading: Icon(Icons.folder_rounded, size: 26, color: Colors.blueAccent.withAlpha(200)),
       name: folder.name,
       modifiedText: _formatDateTime(folder.updatedAt),
-      infoText: '${c.notebooks + c.folders} 個項目',
+      infoText: S.of(context).itemCount(c.notebooks + c.folders),
       showInfo: showInfo,
       onTap: () => _controller.enterFolder(folder.id),
       trailing: PopupMenuButton<String>(
@@ -722,7 +781,7 @@ class _ShelfPageState extends State<ShelfPage> {
           if (v == 'rename') _renameFolder(folder);
           if (v == 'delete') _showDeleteFolderDialog(folder);
         },
-        itemBuilder: (ctx) => FolderCard.menuItems(),
+        itemBuilder: (ctx) => FolderCard.menuItems(S.of(context)),
       ),
     );
     return _folderDropTarget(
@@ -747,7 +806,7 @@ class _ShelfPageState extends State<ShelfPage> {
       ),
       name: nb.title,
       modifiedText: _formatDateTime(nb.updatedAt),
-      infoText: '${nb.pageCount} 頁',
+      infoText: S.of(context).pageCount(nb.pageCount),
       showInfo: showInfo,
       onTap: () => _openNotebook(nb),
       trailing: PopupMenuButton<String>(
@@ -759,7 +818,7 @@ class _ShelfPageState extends State<ShelfPage> {
           if (v == 'delete') _showDeleteNotebookDialog(nb);
           if (v == 'export') _exportNotebook(nb);
         },
-        itemBuilder: (ctx) => NotebookCard.menuItems(),
+        itemBuilder: (ctx) => NotebookCard.menuItems(S.of(context)),
       ),
     );
     return _draggable(_DragItem(isFolder: false, id: nb.id, name: nb.title), row);
@@ -774,8 +833,9 @@ class _ShelfPageState extends State<ShelfPage> {
   // 新增項目 (選單：新增筆記本 / 新增資料夾)
   // ==========================================================
   Widget _buildAddMenu({required Widget child}) {
+    final s = S.of(context);
     return PopupMenuButton<String>(
-      tooltip: '新增...',
+      tooltip: s.addEllipsis,
       offset: const Offset(0, 50),
       onSelected: (val) {
         if (val == 'notebook') {
@@ -792,14 +852,14 @@ class _ShelfPageState extends State<ShelfPage> {
           _showCreateFolderDialog();
         }
       },
-      itemBuilder: (ctx) => const [
+      itemBuilder: (ctx) => [
         PopupMenuItem(
           value: 'notebook',
           child: Row(
             children: [
-              Icon(Icons.book_outlined, color: Colors.blueAccent),
-              SizedBox(width: 8),
-              Text('新增筆記本'),
+              const Icon(Icons.book_outlined, color: Colors.blueAccent),
+              const SizedBox(width: 8),
+              Text(s.newNotebook),
             ],
           ),
         ),
@@ -807,9 +867,9 @@ class _ShelfPageState extends State<ShelfPage> {
           value: 'folder',
           child: Row(
             children: [
-              Icon(Icons.create_new_folder_outlined, color: Colors.amber),
-              SizedBox(width: 8),
-              Text('新增資料夾'),
+              const Icon(Icons.create_new_folder_outlined, color: Colors.amber),
+              const SizedBox(width: 8),
+              Text(s.newFolder),
             ],
           ),
         ),
@@ -823,8 +883,8 @@ class _ShelfPageState extends State<ShelfPage> {
       child: Container(
         height: ShelfListRow.rowHeight,
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+          color: context.cs.surface,
+          border: Border(bottom: BorderSide(color: context.cs.outlineVariant.withAlpha(110))),
         ),
         child: Row(
           children: [
@@ -842,9 +902,9 @@ class _ShelfPageState extends State<ShelfPage> {
                 ),
               ),
             ),
-            const Text(
-              '新增項目',
-              style: TextStyle(
+            Text(
+              S.of(context).newItem,
+              style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.bold,
                 color: Colors.blueAccent,
@@ -863,9 +923,9 @@ class _ShelfPageState extends State<ShelfPage> {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: context.cs.surface,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.grey[300]!, width: 1.5),
+                border: Border.all(color: context.cs.outlineVariant, width: 1.5),
               ),
               child: Center(
                 child: Column(
@@ -881,9 +941,9 @@ class _ShelfPageState extends State<ShelfPage> {
                       child: const Icon(Icons.add, color: Colors.blueAccent, size: 26),
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      '新增項目',
-                      style: TextStyle(
+                    Text(
+                      S.of(context).newItem,
+                      style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
                         color: Colors.blueAccent,

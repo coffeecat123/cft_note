@@ -1,7 +1,9 @@
 // lib/features/shelf/presentation/controllers/shelf_controller.dart
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
+import '../../../../core/i18n/app_strings.dart';
+import '../../../canvas/domain/models/canvas_prefs.dart';
 import '../../../document/data/storage_service.dart';
+import '../../../document/domain/note_page.dart';
 import '../../../pdf_import_export/services/pdf_service.dart';
 import '../../domain/models/note_folder.dart';
 import '../../domain/models/notebook.dart';
@@ -32,7 +34,7 @@ class ShelfController extends ChangeNotifier {
   void _collectStorageWarnings() {
     final w = StorageService.takeWarnings();
     if (w.isNotEmpty) {
-      _pendingWarning = [if (_pendingWarning != null) _pendingWarning!, ...w].join('\n');
+      _pendingWarning = [?_pendingWarning, ...w].join('\n');
     }
   }
 
@@ -116,7 +118,7 @@ class ShelfController extends ChangeNotifier {
     } catch (e, st) {
       debugPrint('讀取存檔失敗：$e\n$st');
       _readOnly = true;
-      _pendingWarning = '讀取存檔時發生錯誤，為保護現有資料，本次使用期間不會寫入存檔。\n$e';
+      _pendingWarning = S.current.loadError(e);
     }
 
     if (loadedFolders != null) {
@@ -128,7 +130,7 @@ class ShelfController extends ChangeNotifier {
       notebooks = [
         Notebook(
           id: 'default_1',
-          title: '日常速記',
+          title: S.current.defaultNotebookTitle,
           coverColor: const Color(0xFF2B3A4A),
           updatedAt: DateTime.now(),
         ),
@@ -189,7 +191,7 @@ class ShelfController extends ChangeNotifier {
   Future<void> createFolder(String name) async {
     final newFolder = NoteFolder(
       id: 'folder_${DateTime.now().microsecondsSinceEpoch}',
-      name: name.trim().isEmpty ? '未命名資料夾' : name.trim(),
+      name: name.trim().isEmpty ? S.current.untitledFolder : name.trim(),
       createdAt: DateTime.now(),
       parentFolderId: currentFolderId,
     );
@@ -361,10 +363,17 @@ class ShelfController extends ChangeNotifier {
   Future<void> createNotebook({required String title, required Color coverColor}) async {
     final newBook = Notebook(
       id: Notebook.generateId(),
-      title: title.trim().isEmpty ? '未命名筆記' : title.trim(),
+      title: title.trim().isEmpty ? S.current.untitledNotebook : title.trim(),
       coverColor: coverColor,
       updatedAt: DateTime.now(),
       folderId: currentFolderId,
+      // ★ 新筆記本的第一頁沿用「上次修改好的」空白頁樣式
+      pages: [
+        NotePage(
+          id: 'page_1',
+          background: CanvasPrefs.initial.lastBlankBackground,
+        ),
+      ],
     );
     notebooks.insert(0, newBook);
     _touchFolder(currentFolderId);
@@ -384,7 +393,8 @@ class ShelfController extends ChangeNotifier {
 
   /// 複製筆記本：新 id + 頁面/筆劃深層複製，副本與原本完全獨立
   Future<void> duplicateNotebook(Notebook target) async {
-    final cloned = target.duplicate(title: '${target.title} (副本)');
+    final cloned =
+        target.duplicate(title: '${target.title} ${S.current.copySuffix}');
     notebooks.insert(0, cloned);
     await _persist();
     notifyListeners();

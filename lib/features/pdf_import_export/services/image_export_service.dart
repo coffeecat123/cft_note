@@ -9,13 +9,15 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 
+import '../../../core/i18n/app_strings.dart';
+
 class ImageExportService {
   ImageExportService._();
 
   /// 讓使用者選位置存成 PNG；使用者取消回傳 false
   static Future<bool> savePng(Uint8List bytes, String fileName) async {
     final Uri? saveUri = await FilePicker.saveFile(
-      dialogTitle: '儲存截圖',
+      dialogTitle: S.current.saveScreenshotTitle,
       fileName: fileName,
       bytes: bytes,
     );

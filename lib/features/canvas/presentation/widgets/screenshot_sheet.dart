@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../../app/theme/app_theme.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../../../pdf_import_export/services/image_export_service.dart';
 
 /// 截圖完成後的底部面板：預覽 + 複製 / 分享 / 存到相簿 / 儲存檔案
@@ -52,7 +54,9 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
         if (closeOnSuccess) navigator.pop();
       }
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('操作失敗：$e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text(S.current.operationFailed(e))),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -67,6 +71,9 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
   @override
   Widget build(BuildContext context) {
     final maxPreviewH = MediaQuery.of(context).size.height * 0.4;
+    final s = S.of(context);
+    // 在任何 await 之前先取得，非同步結束後不再碰 context
+    final messenger = ScaffoldMessenger.of(context);
 
     return SafeArea(
       child: Padding(
@@ -79,9 +86,9 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
               constraints: BoxConstraints(maxHeight: maxPreviewH),
               child: Container(
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF1F3F6),
+                  color: context.cs.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.grey.shade300),
+                  border: Border.all(color: context.cs.outlineVariant),
                 ),
                 padding: const EdgeInsets.all(8),
                 child: Image.memory(widget.png, fit: BoxFit.contain),
@@ -99,12 +106,12 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
                       Expanded(
                         child: _action(
                           Icons.copy_rounded,
-                          '複製',
+                          s.copy,
                           () => _run(
                             () => ImageExportService.copyPngToClipboard(
                               widget.png,
                             ),
-                            successMessage: '已複製圖片到剪貼簿',
+                            successMessage: s.imageCopied,
                             closeOnSuccess: true,
                           ),
                         ),
@@ -113,7 +120,7 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
                       child: Builder(
                         builder: (btnCtx) => _action(
                           Icons.ios_share,
-                          '分享',
+                          s.share,
                           () => _run(() async {
                             await ImageExportService.sharePng(
                               widget.png,
@@ -129,23 +136,23 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
                       Expanded(
                         child: _action(
                           Icons.photo_library_outlined,
-                          '存到相簿',
+                          s.saveToGallery,
                           () => _run(
                             () async {
                               final ok = await ImageExportService.saveToGallery(
                                 widget.png,
                                 widget.fileName,
                               );
-                              if (!ok && mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('沒有相簿存取權限，請到系統設定開啟'),
+                              if (!ok) {
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                    content: Text(s.noGalleryPermission),
                                   ),
                                 );
                               }
                               return ok;
                             },
-                            successMessage: '已存到相簿',
+                            successMessage: s.savedToGallery,
                             closeOnSuccess: true,
                           ),
                         ),
@@ -153,13 +160,13 @@ class _ScreenshotSheetState extends State<ScreenshotSheet> {
                     Expanded(
                       child: _action(
                         Icons.save_alt,
-                        '儲存檔案',
+                        s.saveFile,
                         () => _run(
                           () => ImageExportService.savePng(
                             widget.png,
                             widget.fileName,
                           ),
-                          successMessage: '截圖已儲存',
+                          successMessage: s.screenshotSaved,
                           closeOnSuccess: true,
                         ),
                       ),

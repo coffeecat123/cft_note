@@ -1,5 +1,7 @@
 // lib/features/shelf/presentation/widgets/folder_card.dart
 import 'package:flutter/material.dart';
+import '../../../../app/theme/app_theme.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../../domain/models/note_folder.dart';
 
 class FolderCard extends StatelessWidget {
@@ -20,6 +22,8 @@ class FolderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final colors = context.appColors;
     return GestureDetector(
       onTap: onTap,
       child: Column(
@@ -29,9 +33,9 @@ class FolderCard extends StatelessWidget {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xFFE8F0FE), // 經典清爽淺藍色夾
+                color: colors.folderCard, // 經典清爽淺藍色夾 (深色主題為深藍)
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFD2E3FC), width: 1.5),
+                border: Border.all(color: colors.folderCardBorder, width: 1.5),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withAlpha(20),
@@ -62,12 +66,12 @@ class FolderCard extends StatelessWidget {
                       folder.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: context.cs.onSurface),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '$itemCount 個項目',
-                      style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                      s.itemCount(itemCount),
+                      style: TextStyle(fontSize: 10, color: context.cs.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -79,7 +83,7 @@ class FolderCard extends StatelessWidget {
                   if (val == 'rename') onRename();
                   if (val == 'delete') onDelete();
                 },
-                itemBuilder: (ctx) => menuItems(),
+                itemBuilder: (ctx) => menuItems(s),
               ),
             ],
           ),
@@ -89,24 +93,24 @@ class FolderCard extends StatelessWidget {
   }
 
   /// 選單項目 (清單模式的列也共用)
-  static List<PopupMenuEntry<String>> menuItems() => [
-          const PopupMenuItem(
+  static List<PopupMenuEntry<String>> menuItems(S s) => [
+          PopupMenuItem(
             value: 'rename',
             child: Row(
               children: [
-                Icon(Icons.edit_outlined, size: 18),
-                SizedBox(width: 8),
-                Text('重新命名', style: TextStyle(fontSize: 13)),
+                const Icon(Icons.edit_outlined, size: 18),
+                const SizedBox(width: 8),
+                Text(s.rename, style: const TextStyle(fontSize: 13)),
               ],
             ),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'delete',
             child: Row(
               children: [
-                Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
-                SizedBox(width: 8),
-                Text('刪除資料夾', style: TextStyle(fontSize: 13, color: Colors.redAccent)),
+                const Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                const SizedBox(width: 8),
+                Text(s.deleteFolder, style: const TextStyle(fontSize: 13, color: Colors.redAccent)),
               ],
             ),
           ),

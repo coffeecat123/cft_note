@@ -10,6 +10,7 @@ import '../../../../core/engine/tile_planner.dart';
 import '../../../document/data/page_image_store.dart';
 import '../../../document/domain/note_page.dart';
 import '../../../pdf_import_export/services/pdf_service.dart';
+import '../../../document/domain/page_background.dart';
 import '../../domain/models/stroke.dart';
 
 class RegionCapture {
@@ -47,6 +48,10 @@ class RegionCapture {
       final pageRect = ui.Rect.fromLTWH(0, 0, page.width, page.height);
       // 整個輸出範圍先鋪不透明白底，PNG 不會有任何透明像素 (圖片 / PDF 有透明處也一樣)
       canvas.drawRect(region, ui.Paint()..color = const ui.Color(0xFFFFFFFF));
+      // 空白頁：再鋪上這一頁自己的紙張顏色
+      if (page.isBlank) {
+        PageBackgroundPainter.paintPaper(canvas, pageRect, page.background);
+      }
 
       // 底圖
       final imagePaint = ui.Paint()..filterQuality = ui.FilterQuality.medium;
@@ -80,14 +85,13 @@ class RegionCapture {
           );
         }
       } else {
-        // 空白頁橫線 (與畫布顯示一致)
-        final linePaint = ui.Paint()
-          ..color = const ui.Color(0x289E9E9E)
-          ..strokeWidth = 1.0;
-        for (double y = 40; y < page.height; y += 32) {
-          if (y < region.top - 1 || y > region.bottom + 1) continue;
-          canvas.drawLine(ui.Offset(20, y), ui.Offset(page.width - 20, y), linePaint);
-        }
+        // 空白頁格線 (與畫布顯示一致)
+        PageBackgroundPainter.paintGrid(
+          canvas,
+          ui.Size(page.width, page.height),
+          page.background,
+          visible: region,
+        );
       }
 
       // 使用者放上去的圖片 (在筆劃之下、裁在紙張內)

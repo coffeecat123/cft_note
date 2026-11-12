@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:cft_note/features/canvas/domain/models/tools.dart';
 import 'package:flutter/material.dart';
 import 'package:perfect_freehand/perfect_freehand.dart';
+import '../../../document/domain/page_background.dart';
 import '../controllers/canvas_controller.dart';
 
 class HistoryLayerPainter extends CustomPainter {
@@ -52,8 +53,13 @@ class HistoryLayerPainter extends CustomPainter {
       canvas.drawRect(pageRect.shift(const Offset(0, 6)), shadowPaint);
     }
 
-    // 2. 純白實心底紙
-    canvas.drawRect(pageRect, Paint()..color = Colors.white);
+    // 2. 實心底紙：空白頁用自己的紙張顏色；PDF 頁面維持純白 (底圖會蓋在上面)
+    final bool isBlank = page.pdfFilePath == null;
+    final PageBackground background = page.background;
+    canvas.drawRect(
+      pageRect,
+      Paint()..color = isBlank ? background.color : Colors.white,
+    );
 
     // 3. 繪製高解析度 PDF
     final bgImage = page.cachedBackgroundImage;
@@ -67,14 +73,13 @@ class HistoryLayerPainter extends CustomPainter {
         pageRect,
         imagePaint,
       );
-    } else if (page.pdfFilePath == null) {
-      // 空白頁橫線 (PDF 頁面底圖載入中時保持純白，不閃橫線)
-      final linePaint = Paint()
-        ..color = Colors.grey.withAlpha(40)
-        ..strokeWidth = 1.0;
-      for (double y = 40; y < pageHeight; y += 32) {
-        canvas.drawLine(Offset(20, y), Offset(pageWidth - 20, y), linePaint);
-      }
+    } else if (isBlank) {
+      // 空白頁格線：橫線 / 直線 / 方格 (PDF 頁面底圖載入中時保持純白，不閃線)
+      PageBackgroundPainter.paintGrid(
+        canvas,
+        Size(pageWidth, pageHeight),
+        background,
+      );
     }
 
     // 3.5 ★ 分塊高清圖塊：只覆蓋可視區域，疊在低解析度底圖之上
@@ -226,15 +231,20 @@ class ActiveLayerPainter extends CustomPainter {
       final center = controller.eraserPosition!;
       final radius = controller.currentEraseRadius;
 
+      // 深色紙張上改用白色，橡皮擦圈才看得到
+      final cp = controller.currentPage;
+      final bool onDarkPaper =
+          cp.isBlank && cp.background.color.computeLuminance() < 0.5;
+
       // 1. 半透明灰色填充
       final fillPaint = Paint()
-        ..color = Colors.black.withAlpha(25)
+        ..color = (onDarkPaper ? Colors.white : Colors.black).withAlpha(25)
         ..style = PaintingStyle.fill;
       canvas.drawCircle(center, radius, fillPaint);
 
       // 2. 深灰色細邊框線 (筆寬隨縮放自適應)
       final borderPaint = Paint()
-        ..color = Colors.black54
+        ..color = onDarkPaper ? Colors.white70 : Colors.black54
         ..strokeWidth = 1.0 / (controller.zoomPercentage / 100)
         ..style = PaintingStyle.stroke;
       canvas.drawCircle(center, radius, borderPaint);

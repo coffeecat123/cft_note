@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/i18n/app_strings.dart';
 import '../../domain/models/tools.dart';
 
 /// 套索工具的浮動小選單：出現在點擊位置上方，空間不夠時改放下方，並保持在畫面內。
@@ -35,26 +36,27 @@ class LassoContextMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     final items = switch (kind) {
       LassoMenuKind.selection => [
-        _item(Icons.content_cut, '剪下', onCut),
-        _item(Icons.content_copy, '複製', onCopy),
-        _item(Icons.delete_outline, '刪除', onDelete, color: Colors.redAccent),
-        _item(Icons.crop_free, '截圖', onScreenshot),
+        _item(Icons.content_cut, s.cut, onCut),
+        _item(Icons.content_copy, s.copy, onCopy),
+        _item(Icons.delete_outline, s.delete, onDelete, color: Colors.redAccent),
+        _item(Icons.crop_free, s.screenshot, onScreenshot),
       ],
-      LassoMenuKind.region => [_item(Icons.crop_free, '截圖', onScreenshot)],
+      LassoMenuKind.region => [_item(Icons.crop_free, s.screenshot, onScreenshot)],
       LassoMenuKind.paste => [
         // 兩種都有時才加註種類，避免使用者分不清
         if (canPasteStrokes)
           _item(
             Icons.content_paste,
-            canPasteImage ? '貼上筆跡' : '貼上',
+            canPasteImage ? s.pasteStrokes : s.paste,
             onPaste,
           ),
         if (canPasteImage)
           _item(
             Icons.image_outlined,
-            canPasteStrokes ? '貼上圖片' : '貼上',
+            canPasteStrokes ? s.pasteImage : s.paste,
             onPasteImage,
           ),
       ],

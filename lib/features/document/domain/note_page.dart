@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:cft_note/features/canvas/domain/models/stroke.dart';
 import 'package:cft_note/features/canvas/domain/commands/canvas_command.dart';
 import 'package:cft_note/features/document/domain/page_image.dart';
+import 'package:cft_note/features/document/domain/page_background.dart';
 
 class NotePage {
   final String id;
@@ -30,6 +31,9 @@ class NotePage {
   double width;
   double height;
 
+  /// 空白頁的背景 (紙張顏色 + 格線)。PDF 頁面不使用這個欄位。
+  PageBackground background;
+
   NotePage({
     required this.id,
     List<Stroke>? strokes,
@@ -43,10 +47,14 @@ class NotePage {
     this.renderedScale = 4.0,
     this.width = 595.0,
     this.height = 842.0,
+    this.background = PageBackground.standard,
   })  : strokes = strokes ?? [],
         images = images ?? [],
         undoStack = undoStack ?? [],
         redoStack = redoStack ?? [];
+
+  /// 沒有綁定 PDF = 空白頁 (可套用背景設定)
+  bool get isBlank => pdfFilePath == null;
 
   /// 深層複製：筆劃完全獨立。
   /// 不複製 undo/redo (命令物件指向原筆劃)，也不複製 ui.Image
@@ -60,12 +68,14 @@ class NotePage {
     renderedScale: renderedScale,
     width: width,
     height: height,
+    background: background,
   );
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'width': width,
     'height': height,
+    'background': background.toJson(),
     'pdfFilePath': pdfFilePath,
     'pdfPageNumber': pdfPageNumber,
     'strokes': strokes.map((s) => s.toJson()).toList(),
@@ -77,6 +87,7 @@ class NotePage {
       id: json['id'] as String,
       width: (json['width'] as num?)?.toDouble() ?? 595.0,
       height: (json['height'] as num?)?.toDouble() ?? 842.0,
+      background: PageBackground.fromJson(json['background']),
       pdfFilePath: json['pdfFilePath'] as String?,
       pdfPageNumber: json['pdfPageNumber'] as int?,
       strokes: (json['strokes'] as List? ?? [])

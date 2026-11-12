@@ -1,14 +1,45 @@
 // lib/features/pdf_import_export/services/pdf_export_service.dart
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui' show Offset, Size; // 使用原生 Offset 與 Size
+import 'dart:ui' show Color, Offset, Rect, Size; // 使用原生 Offset / Rect / Size / Color
 import 'package:file_picker/file_picker.dart';
 import 'package:perfect_freehand/perfect_freehand.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
+import '../../../core/i18n/app_strings.dart';
 import '../../document/data/page_image_store.dart';
+import '../../document/domain/page_background.dart';
 import '../../shelf/domain/models/notebook.dart';
 
 class PdfExportService {
+  static PdfColor _pdfColor(Color c) => PdfColor(
+        (c.r * 255.0).round().clamp(0, 255),
+        (c.g * 255.0).round().clamp(0, 255),
+        (c.b * 255.0).round().clamp(0, 255),
+      );
+
+  /// 空白頁背景：紙張底色 + 格線。
+  /// 格線事先與紙色混合成不透明色，避免依賴 PDF 的透明度支援。
+  static void _drawBlankBackground(
+    PdfGraphics graphics,
+    double width,
+    double height,
+    PageBackground bg,
+  ) {
+    graphics.drawRectangle(
+      brush: PdfSolidBrush(_pdfColor(bg.color)),
+      bounds: Rect.fromLTWH(0, 0, width, height),
+    );
+    final lines = PageBackgroundPainter.gridLines(Size(width, height), bg);
+    if (lines.isEmpty) return;
+    final pen = PdfPen(
+      _pdfColor(Color.alphaBlend(bg.gridColor, bg.color)),
+      width: 1,
+    );
+    for (final (from, to) in lines) {
+      graphics.drawLine(pen, from, to);
+    }
+  }
+
   /// 將整本 Notebook 合成並匯出為「真向量、原字體無損」的 PDF
   static Future<bool> exportNotebook(Notebook notebook) async {
     final PdfDocument outputDoc = PdfDocument();
@@ -25,6 +56,13 @@ class PdfExportService {
 
         final PdfPage targetExportPage = section.pages.add();
         final PdfGraphics graphics = targetExportPage.graphics;
+
+        // ============================================================
+        // 0. 空白頁：先畫紙張顏色與格線 (向量)，與畫布上看到的一致
+        // ============================================================
+        if (page.isBlank) {
+          _drawBlankBackground(graphics, page.width, page.height, page.background);
+        }
 
         // ============================================================
         // 1. 若為原始 PDF 頁面，注入原版向量範本 (100% 保留文字向量與可反白特性)
@@ -90,7 +128,7 @@ class PdfExportService {
 
       // ★ 修正 3 & 4：移除 saveFile 棄用的 type 與 allowedExtensions 參數
       final Uri? saveUri = await FilePicker.saveFile(
-        dialogTitle: '匯出筆記為 PDF',
+        dialogTitle: S.current.exportDialogTitle,
         fileName: '${notebook.title}.pdf',
         bytes: Uint8List.fromList(pdfBytes),
       );

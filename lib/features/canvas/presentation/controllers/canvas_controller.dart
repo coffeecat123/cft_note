@@ -11,6 +11,7 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:perfect_freehand/perfect_freehand.dart';
 
 import '../../../../core/algorithms/ray_casting.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../../../../core/engine/repaint_signal.dart';
 import '../../domain/models/brush_settings.dart';
 import '../../domain/models/canvas_prefs.dart';
@@ -22,6 +23,7 @@ import '../../../document/data/page_image_store.dart';
 import '../../../document/data/storage_service.dart';
 import '../../../pdf_import_export/services/clipboard_image_service.dart';
 import '../../../document/domain/note_page.dart';
+import '../../../document/domain/page_background.dart';
 import '../../../document/domain/page_image.dart';
 import 'page_image_manager.dart';
 import 'region_capture.dart';
@@ -431,7 +433,7 @@ class CanvasController extends ChangeNotifier {
     } else {
       final fallbackBook = Notebook(
         id: 'nb_fallback',
-        title: '未命名筆記',
+        title: S.current.untitledNotebook,
         coverColor: const Color(0xFF2B3A4A),
         updatedAt: DateTime.now(),
       );
@@ -448,6 +450,9 @@ class CanvasController extends ChangeNotifier {
     brush = prefs.brush;
     strokeColor = prefs.strokeColor;
     layoutMode = prefs.layoutMode;
+    lastBlankBackground = prefs.lastBlankBackground;
+    newPageStyle = prefs.newPageStyle;
+    recentBackgrounds.addAll(prefs.recentBackgrounds.take(8));
     if (prefs.favoriteColors != null) {
       favoriteColors
         ..clear()
@@ -526,9 +531,13 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ★ 關閉標籤頁 (點擊 x)
+  /// 最後一個標籤已被關閉 (離開畫布頁時，書架不應再保留任何開啟中的標籤)
+  bool allTabsClosed = false;
+
   void closeTab(int index, VoidCallback onAllClosed) {
     if (openNotebooks.length <= 1) {
       saveCurrentPage();
+      allTabsClosed = true; // 書架就不再顯示「繼續編輯」
       onAllClosed(); // 只剩最後一個標籤，關閉直接退回書架
       return;
     }
@@ -679,6 +688,9 @@ class CanvasController extends ChangeNotifier {
       layoutMode: layoutMode,
       recentColors: List.of(recentColors),
       favoriteColors: List.of(favoriteColors),
+      lastBlankBackground: lastBlankBackground,
+      newPageStyle: newPageStyle,
+      recentBackgrounds: List.of(recentBackgrounds),
     );
     CanvasPrefs.initial = prefs; // 下次開筆記 / 切換標籤時直接用最新值
     unawaited(StorageService.saveCanvasPrefs(prefs.toJson()));
@@ -717,6 +729,8 @@ class CanvasController extends ChangeNotifier {
     }
     currentPageIndex = targetIndex.clamp(0, pages.length - 1);
     final targetPage = pages[currentPageIndex];
+    // 換到空白頁就把它的背景記進「最近使用」(PDF 頁面不用)
+    if (targetPage.isBlank) recordRecentBackground(targetPage.background);
 
     // 離開的頁面釋放圖塊與底圖，避免翻頁越翻越吃記憶體
     images.setShown(targetPage);
@@ -797,12 +811,87 @@ class CanvasController extends ChangeNotifier {
     if (isContinuous) _placeCurrent();
   }
 
+  // ==========================================
+  // ★ 空白頁背景 (紙張顏色 + 格線)
+  //   - 可只改目前頁，或一次改此筆記本的所有空白頁 (PDF 頁面不受影響)
+  //   - 每次修改都記成「上次修改的樣式」(存進偏好設定)，
+  //     新增空白頁 / 新增筆記本時可直接沿用，也可選擇改成跟目前頁面一樣
+  // ==========================================
+  PageBackground lastBlankBackground = PageBackground.standard;
+  NewPageStyle newPageStyle = NewPageStyle.lastUsed;
+
+  /// 最近使用的頁面背景 (最新在前，最多 8 個)
+  final List<PageBackground> recentBackgrounds = [];
+
+  /// 記錄一個背景樣式到「最近使用」。不通知畫面 (背景選單關閉時呼叫)。
+  void recordRecentBackground(PageBackground bg) {
+    if (recentBackgrounds.isNotEmpty && recentBackgrounds.first == bg) return;
+    recentBackgrounds.remove(bg);
+    recentBackgrounds.insert(0, bg);
+    if (recentBackgrounds.length > 8) recentBackgrounds.removeLast();
+    _schedulePrefsSave();
+  }
+
+  void removeRecentBackground(PageBackground bg) {
+    if (recentBackgrounds.remove(bg)) _schedulePrefsSave();
+  }
+
+  /// 目前頁面是空白頁 (PDF 頁面不能設定背景)
+  bool get currentPageIsBlank => currentPage.isBlank;
+
+  /// 這本筆記本有幾頁空白頁
+  int get blankPageCount => pages.where((p) => p.isBlank).length;
+
+  /// 背景選單開啟時的初始值：目前是空白頁就用它，否則用上次的樣式
+  PageBackground get backgroundForSheet =>
+      currentPage.isBlank ? currentPage.background : lastBlankBackground;
+
+  /// 套用背景。[allBlankPages] = true → 此筆記本所有空白頁；false → 只有目前頁。
+  void applyPageBackground(PageBackground bg, {required bool allBlankPages}) {
+    bool changed = false;
+    if (allBlankPages) {
+      for (final p in pages) {
+        if (p.isBlank && p.background != bg) {
+          p.background = bg;
+          changed = true;
+        }
+      }
+    } else if (currentPage.isBlank && currentPage.background != bg) {
+      currentPage.background = bg;
+      changed = true;
+    }
+    if (lastBlankBackground != bg) {
+      lastBlankBackground = bg;
+      _schedulePrefsSave();
+    }
+    if (changed) {
+      _markDirty(); // 觸發自動存檔
+      notifyListeners(); // 重繪畫布
+    }
+  }
+
+  void setNewPageStyle(NewPageStyle style) {
+    if (style == newPageStyle) return;
+    newPageStyle = style;
+    _schedulePrefsSave();
+    notifyListeners();
+  }
+
+  /// 新增空白頁時要用的背景
+  PageBackground _backgroundForNewPage() {
+    if (newPageStyle == NewPageStyle.currentPage && currentPage.isBlank) {
+      return currentPage.background;
+    }
+    return lastBlankBackground;
+  }
+
   // 在此頁後面插入一頁空白頁
   void insertBlankPageAfterCurrent() {
     syncCurrentToFocus();
     _saveCurrentPageState();
     final newPage = NotePage(
       id: 'page_${DateTime.now().millisecondsSinceEpoch}',
+      background: _backgroundForNewPage(),
     );
     // 這裡的 pages.insert 會直接插入 currentNotebook.pages！
     pages.insert(currentPageIndex + 1, newPage);
@@ -1287,7 +1376,7 @@ class CanvasController extends ChangeNotifier {
     _redoStack.clear();
     _selectedImage = null;
     _markDirty();
-    _showHudMessage('已刪除圖片', icon: Icons.delete_outline);
+    _showHudMessage(S.current.imageDeleted, icon: Icons.delete_outline);
   }
 
   /// 繪製時發現圖片還沒解碼 → 背景載入，完成後只重繪畫布
@@ -1620,9 +1709,9 @@ class CanvasController extends ChangeNotifier {
         // ★ 解決問題 1：只有真正能 Undo 時才執行並顯示「已復原」，否則顯示「無可復原項目」
         if (canUndo) {
           undo();
-          _showHudMessage('已復原');
+          _showHudMessage(S.current.undone);
         } else {
-          _showHudMessage('無可復原項目');
+          _showHudMessage(S.current.nothingToUndo);
         }
       }
     }
@@ -1771,12 +1860,14 @@ class CanvasController extends ChangeNotifier {
     final bytes = await ClipboardImageService.readImage();
     if (_disposed) return;
     if (bytes == null) {
-      _showHudMessage('剪貼簿沒有圖片', icon: Icons.image_not_supported_outlined);
+      _showHudMessage(S.current.clipboardNoImage,
+          icon: Icons.image_not_supported_outlined);
       return;
     }
     final ok = await addImageFromBytes(bytes, at: at);
     if (!_disposed && !ok) {
-      _showHudMessage('無法載入這張圖片', icon: Icons.image_not_supported_outlined);
+      _showHudMessage(S.current.imageLoadFailed,
+          icon: Icons.image_not_supported_outlined);
     }
   }
 
@@ -1790,11 +1881,12 @@ class CanvasController extends ChangeNotifier {
       _selectedStrokes.isNotEmpty || _selectedImages.isNotEmpty;
 
   String _countLabel() {
+    final s = S.current;
     final parts = <String>[
-      if (_selectedStrokes.isNotEmpty) '${_selectedStrokes.length} 筆',
-      if (_selectedImages.isNotEmpty) '${_selectedImages.length} 張圖片',
+      if (_selectedStrokes.isNotEmpty) s.strokesCount(_selectedStrokes.length),
+      if (_selectedImages.isNotEmpty) s.imagesCount(_selectedImages.length),
     ];
-    return parts.join('、');
+    return parts.join(s.listSeparator);
   }
 
   void _copySelectionToClipboard() {
@@ -1806,7 +1898,7 @@ class CanvasController extends ChangeNotifier {
     if (!_hasSelectedContent) return;
     _copySelectionToClipboard();
     lassoMenu = LassoMenuKind.none;
-    _showHudMessage('已複製 ${_countLabel()}', icon: Icons.content_copy);
+    _showHudMessage(S.current.copiedX(_countLabel()), icon: Icons.content_copy);
   }
 
   void cutSelection() {
@@ -1814,14 +1906,14 @@ class CanvasController extends ChangeNotifier {
     _copySelectionToClipboard();
     final label = _countLabel();
     _removeSelected();
-    _showHudMessage('已剪下 $label', icon: Icons.content_cut);
+    _showHudMessage(S.current.cutX(label), icon: Icons.content_cut);
   }
 
   void deleteSelection() {
     if (!_hasSelectedContent) return;
     final label = _countLabel();
     _removeSelected();
-    _showHudMessage('已刪除 $label', icon: Icons.delete_outline);
+    _showHudMessage(S.current.deletedX(label), icon: Icons.delete_outline);
   }
 
   /// 刪除目前選取的筆劃與圖片 (一次 Undo；筆劃沿用橡皮擦命令：依移除順序記錄索引)
@@ -1925,7 +2017,7 @@ class CanvasController extends ChangeNotifier {
 
     _bakeHistoryToPicture();
     activeRepaintNotifier.notifyListeners();
-    _showHudMessage('已貼上', icon: Icons.content_paste);
+    _showHudMessage(S.current.pasted, icon: Icons.content_paste);
   }
 
   /// 截圖：套索虛線的「最小外接矩形」(裁在紙張內)，輸出 PNG。含底圖與範圍內所有筆劃。

@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:perfect_freehand/perfect_freehand.dart';
 
+import '../../../../app/theme/app_theme.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../../domain/models/brush_settings.dart';
 import '../controllers/canvas_controller.dart';
 
@@ -29,14 +31,18 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final page = widget.controller.currentPage;
+    // 預覽畫在「目前這頁的紙張顏色」上，深色紙 / 深色主題下黑色筆跡也看得到
+    final previewPaper = page.isBlank ? page.background.color : Colors.white;
     return Container(
       // ★ 設定最大高度上限為螢幕的 90%，防止撐破
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.9,
       ),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      decoration: BoxDecoration(
+        color: context.cs.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: SafeArea(
         top: false,
@@ -50,7 +56,7 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                 width: 40,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: Colors.grey[300],
+                  color: context.cs.outlineVariant,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -67,9 +73,9 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      '筆刷工作室 (Brush Studio)',
-                      style: TextStyle(
+                    Text(
+                      s.brushStudio,
+                      style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
@@ -81,9 +87,9 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                       height: 70,
                       width: double.infinity,
                       decoration: BoxDecoration(
-                        color: Colors.grey[100],
+                        color: previewPaper,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey[300]!),
+                        border: Border.all(color: context.cs.outlineVariant),
                       ),
                       child: CustomPaint(
                         painter: _BrushPreviewPainter(
@@ -99,11 +105,11 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
-                          _presetChip('鋼筆 (書法)', BrushSettings.fountainPen),
+                          _presetChip(s.presetFountain, BrushSettings.fountainPen),
                           const SizedBox(width: 8),
-                          _presetChip('原子筆 (筆記)', BrushSettings.ballpoint),
+                          _presetChip(s.presetBallpoint, BrushSettings.ballpoint),
                           const SizedBox(width: 8),
-                          _presetChip('麥克筆 (繪圖)', BrushSettings.marker),
+                          _presetChip(s.presetMarker, BrushSettings.marker),
                         ],
                       ),
                     ),
@@ -111,7 +117,7 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
 
                     // 四大調節滑桿
                     _buildSlider(
-                      title: '粗細 (Size)',
+                      title: s.brushSize,
                       value: _current.size,
                       min: 0.1,
                       max: 40.0,
@@ -120,7 +126,7 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                       onChanged: (v) => _update(_current.copyWith(size: v)),
                     ),
                     _buildSlider(
-                      title: '壓感變化 (Thinning)',
+                      title: s.brushThinning,
                       value: _current.thinning,
                       min: 0.0,
                       max: 1.0,
@@ -128,7 +134,7 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                       onChanged: (v) => _update(_current.copyWith(thinning: v)),
                     ),
                     _buildSlider(
-                      title: '防手抖牽引 (Streamline)',
+                      title: s.brushStreamline,
                       value: _current.streamline,
                       min: 0.0,
                       max: 1.0,
@@ -137,7 +143,7 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                           _update(_current.copyWith(streamline: v)),
                     ),
                     _buildSlider(
-                      title: '平滑修正 (Smoothing)',
+                      title: s.brushSmoothing,
                       value: _current.smoothing,
                       min: 0.0,
                       max: 1.0,

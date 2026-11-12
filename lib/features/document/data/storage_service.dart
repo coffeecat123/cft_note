@@ -10,6 +10,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cft_note/core/i18n/app_strings.dart';
 import 'package:cft_note/features/shelf/domain/models/note_folder.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:path_provider/path_provider.dart';
@@ -20,7 +21,8 @@ class StorageService {
   static const String _foldersFileName = 'cft_folders.json';
   static const String _fileName = 'cft_notebooks.json';
   static const String _sessionFileName = 'cft_session.json'; // 記錄開啟的 Tab
-  static const String _canvasPrefsFileName = 'cft_canvas_prefs.json'; // 畫筆 / 顏色 / 頁面顯示方式
+  static const String _canvasPrefsFileName = 'cft_canvas_prefs.json'; // 畫筆 / 顏色 / 頁面顯示方式 / 空白頁背景
+  static const String _appSettingsFileName = 'cft_app_settings.json'; // 全域設定 (主題 / 語言)
 
   // ------------------------------------------------------------
   // 警告收集 (供 UI 顯示)
@@ -61,7 +63,7 @@ class StorageService {
           await _atomicWrite(name, content);
         })
         .catchError((Object e, StackTrace st) {
-          _warn('儲存「$name」失敗：$e');
+          _warn(S.current.saveFailed(name, e));
         });
     _tail[name] = next;
     return next;
@@ -125,9 +127,10 @@ class StorageService {
         final aside = '${file.path}.corrupt-${_stamp()}';
         try {
           await file.rename(aside);
-          _warn('「$name」內容損毀，已另存為 ${aside.split(Platform.pathSeparator).last}');
+          _warn(S.current.fileCorruptMovedAside(
+              name, aside.split(Platform.pathSeparator).last));
         } catch (e) {
-          _warn('「$name」內容損毀且無法另存：$e');
+          _warn(S.current.fileCorruptCantMove(name, e));
         }
       }
       // 空檔案 (例如舊版寫入中斷) 直接走備份流程
@@ -141,11 +144,11 @@ class StorageService {
         try {
           await bak.copy(file.path);
         } catch (_) {}
-        _warn('偵測到資料檔異常，已從備份還原 (可能遺失最近一次的修改)。');
+        _warn(S.current.restoredFromBackup);
         return decoded;
       }
     }
-    _warn('資料檔損毀且沒有可用的備份，已保留原檔供救援。');
+    _warn(S.current.noUsableBackup);
     return null;
   }
 
@@ -157,7 +160,7 @@ class StorageService {
     try {
       json = jsonEncode(folders.map((f) => f.toJson()).toList());
     } catch (e) {
-      _warn('資料夾資料無法編碼，已略過儲存：$e');
+      _warn(S.current.foldersEncodeFailed(e));
       return;
     }
     await _write(_foldersFileName, json);
@@ -187,7 +190,7 @@ class StorageService {
       json = jsonEncode(notebooks.map((n) => n.toJson()).toList());
     } catch (e) {
       // 編碼失敗時絕對不能動磁碟上的舊檔
-      _warn('筆記資料無法編碼，已保留先前的存檔：$e');
+      _warn(S.current.notebooksEncodeFailed(e));
       return;
     }
     await _write(_fileName, json);
@@ -214,10 +217,10 @@ class StorageService {
         final file = await _getLocalFile(_fileName);
         final out = File('${file.path}.skipped-${_stamp()}');
         await out.writeAsString(jsonEncode(skipped), flush: true);
-        _warn('有 ${skipped.length} 本筆記無法讀取，原始資料已另存為 '
-            '${out.path.split(Platform.pathSeparator).last}');
+        _warn(S.current.notebooksSkipped(
+            skipped.length, out.path.split(Platform.pathSeparator).last));
       } catch (e) {
-        _warn('有 ${skipped.length} 本筆記無法讀取，且無法另存原始資料：$e');
+        _warn(S.current.notebooksSkippedNoDump(skipped.length, e));
       }
     }
     return result;
@@ -250,7 +253,7 @@ class StorageService {
     try {
       json = jsonEncode(prefs);
     } catch (e) {
-      _warn('畫布設定無法編碼，已略過儲存：$e');
+      _warn(S.current.canvasPrefsEncodeFailed(e));
       return;
     }
     await _write(_canvasPrefsFileName, json);
@@ -258,6 +261,26 @@ class StorageService {
 
   static Future<Map<String, dynamic>?> loadCanvasPrefs() async {
     final decoded = await _readJson(_canvasPrefsFileName, (d) => d is Map);
+    if (decoded == null) return null;
+    return Map<String, dynamic>.from(decoded as Map);
+  }
+
+  // ------------------------------------------------------------
+  // 全域設定 (主題、語言…)
+  // ------------------------------------------------------------
+  static Future<void> saveAppSettings(Map<String, dynamic> settings) async {
+    final String json;
+    try {
+      json = jsonEncode(settings);
+    } catch (e) {
+      _warn(S.current.appSettingsEncodeFailed(e));
+      return;
+    }
+    await _write(_appSettingsFileName, json);
+  }
+
+  static Future<Map<String, dynamic>?> loadAppSettings() async {
+    final decoded = await _readJson(_appSettingsFileName, (d) => d is Map);
     if (decoded == null) return null;
     return Map<String, dynamic>.from(decoded as Map);
   }

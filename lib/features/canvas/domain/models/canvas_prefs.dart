@@ -1,13 +1,24 @@
 // lib/features/canvas/domain/models/canvas_prefs.dart
 import 'package:flutter/material.dart';
 
+import '../../../document/domain/page_background.dart';
 import 'brush_settings.dart';
 import 'page_layout_mode.dart';
+
+/// 新增空白頁時，背景要用哪一種
+enum NewPageStyle {
+  /// 沿用「上次在頁面背景選單修改好的樣式」
+  lastUsed,
+
+  /// 跟目前所在頁面 (空白頁) 一樣
+  currentPage,
+}
 
 /// 畫布的使用者偏好：每次開 App 都要還原的設定
 ///  - 頁面顯示方式 (單頁 / 往下連續 / 往右連續)
 ///  - 畫筆設定 (粗細 / 壓感 / 平滑 / 防手抖)
 ///  - 目前顏色、最近使用顏色、收藏顏色
+///  - 空白頁背景：上次修改的樣式、新增空白頁時的取用方式
 class CanvasPrefs {
   final BrushSettings brush;
   final Color strokeColor;
@@ -17,12 +28,24 @@ class CanvasPrefs {
   /// null = 沒存過，使用控制器內建的預設收藏色
   final List<Color>? favoriteColors;
 
+  /// 上次在「頁面背景」選單修改好的樣式 (新增空白頁 / 新增筆記本時使用)
+  final PageBackground lastBlankBackground;
+
+  /// 新增空白頁時的樣式來源
+  final NewPageStyle newPageStyle;
+
+  /// 最近使用的頁面背景 (最新的在前，與「最近使用顏色」相同的概念)
+  final List<PageBackground> recentBackgrounds;
+
   const CanvasPrefs({
     this.brush = BrushSettings.fountainPen,
     this.strokeColor = Colors.black,
     this.layoutMode = PageLayoutMode.single,
     this.recentColors = const [],
     this.favoriteColors,
+    this.lastBlankBackground = PageBackground.standard,
+    this.newPageStyle = NewPageStyle.lastUsed,
+    this.recentBackgrounds = const [],
   });
 
   /// App 啟動時 (main) 讀進來；之後 CanvasController 建立時套用，
@@ -36,6 +59,9 @@ class CanvasPrefs {
     'recentColors': recentColors.map((c) => c.toARGB32()).toList(),
     if (favoriteColors != null)
       'favoriteColors': favoriteColors!.map((c) => c.toARGB32()).toList(),
+    'lastBlankBackground': lastBlankBackground.toJson(),
+    'newPageStyle': newPageStyle.name,
+    'recentBackgrounds': recentBackgrounds.map((b) => b.toJson()).toList(),
   };
 
   factory CanvasPrefs.fromJson(Map<String, dynamic> json) {
@@ -62,6 +88,17 @@ class CanvasPrefs {
       ),
       recentColors: colors(json['recentColors']) ?? const [],
       favoriteColors: colors(json['favoriteColors']),
+      lastBlankBackground:
+          PageBackground.fromJson(json['lastBlankBackground']),
+      newPageStyle: NewPageStyle.values.firstWhere(
+        (s) => s.name == json['newPageStyle'],
+        orElse: () => NewPageStyle.lastUsed,
+      ),
+      recentBackgrounds: json['recentBackgrounds'] is List
+          ? (json['recentBackgrounds'] as List)
+              .map(PageBackground.fromJson)
+              .toList()
+          : const [],
     );
   }
 }

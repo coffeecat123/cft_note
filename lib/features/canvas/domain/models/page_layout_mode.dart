@@ -1,4 +1,5 @@
 // lib/features/canvas/domain/models/page_layout_mode.dart
+import '../../../../core/i18n/app_strings.dart';
 
 /// 頁面顯示方式
 enum PageLayoutMode {
@@ -15,14 +16,16 @@ enum PageLayoutMode {
 extension PageLayoutModeX on PageLayoutMode {
   bool get isContinuous => this != PageLayoutMode.single;
 
+  /// 依目前語言取得名稱 (畫面在語言切換時會重建，所以直接讀 S.current 即可)
   String get label {
+    final s = S.current;
     switch (this) {
       case PageLayoutMode.single:
-        return '單頁顯示';
+        return s.layoutSingle;
       case PageLayoutMode.vertical:
-        return '往下連續捲動';
+        return s.layoutVertical;
       case PageLayoutMode.horizontal:
-        return '往右連續捲動';
+        return s.layoutHorizontal;
     }
   }
 }

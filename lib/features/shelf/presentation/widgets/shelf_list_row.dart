@@ -1,6 +1,8 @@
 // lib/features/shelf/presentation/widgets/shelf_list_row.dart
 import 'package:flutter/material.dart';
 
+import '../../../../app/theme/app_theme.dart';
+
 /// 精簡清單模式 (類似檔案總管「詳細資料」) 的一列。
 /// 欄位寬度用常數共用，讓標題列與每一列對得整齊。
 class ShelfListRow extends StatelessWidget {
@@ -31,15 +33,16 @@ class ShelfListRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final subStyle = TextStyle(fontSize: 12, color: Colors.grey[600]);
+    final subStyle =
+        TextStyle(fontSize: 12, color: context.cs.onSurfaceVariant);
     return Material(
-      color: Colors.white,
+      color: context.cs.surface,
       child: InkWell(
         onTap: onTap,
         child: Container(
           height: rowHeight,
           decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+            border: Border(bottom: BorderSide(color: context.cs.outlineVariant.withAlpha(110))),
           ),
           child: Row(
             children: [
@@ -49,10 +52,10 @@ class ShelfListRow extends StatelessWidget {
                   name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
-                    color: Colors.black87,
+                    color: context.cs.onSurface,
                   ),
                 ),
               ),

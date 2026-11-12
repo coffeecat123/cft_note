@@ -6,6 +6,8 @@ import 'package:cft_note/features/document/data/storage_service.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../../../../app/theme/app_theme.dart';
+import '../../../../core/i18n/app_strings.dart';
 import '../../../pdf_import_export/services/image_export_service.dart';
 import '../../../pdf_import_export/services/image_pick_service.dart';
 import '../../../pdf_import_export/services/pdf_export_service.dart';
@@ -15,6 +17,7 @@ import '../../domain/models/tools.dart';
 import '../controllers/canvas_controller.dart';
 import '../toolbars/brush_settings_sheet.dart';
 import '../toolbars/color_settings_sheet.dart';
+import '../toolbars/page_background_sheet.dart';
 import 'canvas_painters.dart';
 import 'lasso_context_menu.dart';
 import 'screenshot_sheet.dart';
@@ -57,9 +60,10 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     _controller.flushPrefs();
     final shelf = widget.shelfController;
     shelf.activeTabIndex = _controller.activeNotebookIndex;
-    shelf.openTabs
-      ..clear()
-      ..addAll(_controller.openNotebooks);
+    shelf.openTabs.clear();
+    if (!_controller.allTabsClosed) {
+      shelf.openTabs.addAll(_controller.openNotebooks);
+    }
     unawaited(shelf.saveToDisk()); // 只存檔、不通知書架重建
   }
 
@@ -96,7 +100,11 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     // ★ 同步標籤清單與聚焦索引回書架
     widget.shelfController.activeTabIndex = _controller.activeNotebookIndex;
     widget.shelfController.openTabs.clear();
-    widget.shelfController.openTabs.addAll(_controller.openNotebooks);
+    if (_controller.allTabsClosed) {
+      widget.shelfController.activeTabIndex = 0;
+    } else {
+      widget.shelfController.openTabs.addAll(_controller.openNotebooks);
+    }
     widget.shelfController.notifyNotebookUpdated(); // 立即存檔到硬碟！
     _controller.dispose();
     super.dispose();
@@ -104,14 +112,17 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final colors = context.appColors;
+    final cs = context.cs;
     return Scaffold(
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: colors.workspace,
 
       // 頂部雙層 Bar (標籤列 38px + 工具列 50px)
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(88),
         child: Container(
-          color: const Color(0xFFE9ECEF), // 與標籤列相同的背景色，向上延伸覆蓋
+          color: colors.tabBar, // 與標籤列相同的背景色，向上延伸覆蓋
           child: SafeArea(
             bottom: false, // 僅頂部 SafeArea
             child: Column(
@@ -122,17 +133,17 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                 // ==========================================
                 Container(
                   height: 38,
-                  color: const Color(0xFFE9ECEF),
+                  color: colors.tabBar,
                   child: Row(
                     children: [
                       // 返回首頁書架
                       IconButton(
-                        icon: const Icon(
+                        icon: Icon(
                           Icons.home_outlined,
                           size: 20,
-                          color: Colors.black87,
+                          color: cs.onSurface,
                         ),
-                        tooltip: '返回我的筆記櫃',
+                        tooltip: s.backToShelf,
                         onPressed: () {
                           _controller.saveCurrentPage();
                           widget.shelfController.activeTabIndex =
@@ -222,14 +233,14 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                   ),
                                   decoration: BoxDecoration(
                                     color: isActive
-                                        ? Colors.white
-                                        : const Color(0xFFDFE3E6),
+                                        ? colors.toolbar
+                                        : colors.tabInactive,
                                     borderRadius: const BorderRadius.vertical(
                                       top: Radius.circular(8),
                                     ),
                                     border: isActive
                                         ? Border.all(
-                                            color: Colors.black12,
+                                            color: cs.outlineVariant,
                                             width: 0.5,
                                           )
                                         : null,
@@ -257,8 +268,8 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                                     ? FontWeight.bold
                                                     : FontWeight.normal,
                                                 color: isActive
-                                                    ? Colors.black87
-                                                    : Colors.black54,
+                                                    ? cs.onSurface
+                                                    : cs.onSurfaceVariant,
                                               ),
                                             ),
                                           ),
@@ -299,7 +310,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                 // ==========================================
                 Container(
                   height: 50,
-                  color: Colors.white,
+                  color: colors.toolbar,
                   child: Row(
                     children: [
                       Expanded(
@@ -319,11 +330,11 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 _buildPageNavPill(context),
-                                const VerticalDivider(
+                                VerticalDivider(
                                   width: 1,
                                   indent: 12,
                                   endIndent: 12,
-                                  color: Colors.black12,
+                                  color: cs.outlineVariant,
                                 ),
                                 // 智慧筆刷按鈕 (未選中切換，已選中開啟工作室)
                                 IconButton(
@@ -333,13 +344,13 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                         _controller.currentTool ==
                                             DrawingTool.pen
                                         ? Colors.blue
-                                        : Colors.grey[700],
+                                        : colors.toolbarIcon,
                                     size: 20,
                                   ),
                                   tooltip:
                                       _controller.currentTool == DrawingTool.pen
-                                      ? '開啟筆刷工作室'
-                                      : '筆刷',
+                                      ? s.openBrushStudio
+                                      : s.brush,
                                   onPressed: () {
                                     if (_controller.currentTool !=
                                         DrawingTool.pen) {
@@ -365,10 +376,10 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                         _controller.currentTool ==
                                             DrawingTool.eraser
                                         ? Colors.blue
-                                        : Colors.grey[700],
+                                        : colors.toolbarIcon,
                                     size: 20,
                                   ),
-                                  tooltip: '筆畫橡皮擦',
+                                  tooltip: s.eraser,
                                   onPressed: () =>
                                       _controller.setTool(DrawingTool.eraser),
                                 ),
@@ -381,10 +392,10 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                         _controller.currentTool ==
                                             DrawingTool.lasso
                                         ? Colors.blue
-                                        : Colors.grey[700],
+                                        : colors.toolbarIcon,
                                     size: 20,
                                   ),
-                                  tooltip: '套索工具',
+                                  tooltip: s.lasso,
                                   onPressed: () =>
                                       _controller.setTool(DrawingTool.lasso),
                                 ),
@@ -397,14 +408,14 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                         _controller.currentTool ==
                                             DrawingTool.image
                                         ? Colors.blue
-                                        : Colors.grey[700],
+                                        : colors.toolbarIcon,
                                     size: 20,
                                   ),
                                   tooltip:
                                       _controller.currentTool ==
                                           DrawingTool.image
-                                      ? '插入圖片'
-                                      : '圖片模式',
+                                      ? s.insertImage
+                                      : s.imageMode,
                                   onPressed: _onImageButtonPressed,
                                 ),
 
@@ -458,26 +469,27 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
 
                       // ★ 靠右固定：復原 / 重做 / 頁面列表 / 更多
                       //   (工具太多時只有左邊的工具區會捲動，這一組永遠在最右邊)
-                      const VerticalDivider(
+                      VerticalDivider(
                         width: 1,
                         indent: 12,
                         endIndent: 12,
-                        color: Colors.black12,
+                        color: cs.outlineVariant,
                       ),
                       IconButton(
                         icon: const Icon(Icons.undo, size: 20),
-                        tooltip: '復原',
+                        tooltip: s.undo,
                         onPressed: _controller.canUndo
                             ? _controller.undo
                             : null,
                       ),
                       IconButton(
                         icon: const Icon(Icons.redo, size: 20),
-                        tooltip: '重做',
+                        tooltip: s.redo,
                         onPressed: _controller.canRedo
                             ? _controller.redo
                             : null,
                       ),
+                      _buildPageBackgroundButton(),
                       _buildPageListButton(),
                       _buildMoreMenu(),
                       const SizedBox(width: 4),
@@ -627,11 +639,14 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
   /// 把套索圈選範圍 (最小外接矩形) 輸出成 PNG，並開啟「分享 / 存相簿 / 存檔」面板
   Future<void> _screenshotSelection() async {
     final messenger = ScaffoldMessenger.of(context);
+    final s = S.of(context); // await 之前先取得
     _controller.hideLassoMenu(); // 只收起選單，圈選範圍保留
     final png = await _controller.captureSelectionPng();
     if (!mounted) return;
     if (png == null) {
-      messenger.showSnackBar(const SnackBar(content: Text('截圖失敗：圈選範圍在紙張之外')));
+      messenger.showSnackBar(
+        SnackBar(content: Text(s.screenshotOutsidePage)),
+      );
       return;
     }
     final t = DateTime.now();
@@ -645,7 +660,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     await ScreenshotSheet.show(
       context,
       png: png,
-      fileName: '${title}_截圖_$stamp.png',
+      fileName: '${title}_${s.screenshotNamePart}_$stamp.png',
     );
   }
 
@@ -659,6 +674,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
   }
 
   Future<void> _showImageSourceSheet() async {
+    final s = S.of(context);
     final source = await showModalBottomSheet<ImagePickSource>(
       context: context,
       showDragHandle: true,
@@ -668,12 +684,12 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           children: [
             ListTile(
               leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('系統圖庫'),
+              title: Text(s.sysGallery),
               onTap: () => Navigator.pop(ctx, ImagePickSource.gallery),
             ),
             ListTile(
               leading: const Icon(Icons.folder_open_outlined),
-              title: const Text('系統檔案'),
+              title: Text(s.sysFiles),
               onTap: () => Navigator.pop(ctx, ImagePickSource.files),
             ),
             const SizedBox(height: 8),
@@ -687,25 +703,42 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
   /// 挑圖 → 放進目前頁面並選取 (之後可直接平移 / 縮放 / 刪除)
   Future<void> _pickAndInsertImage(ImagePickSource source) async {
     final messenger = ScaffoldMessenger.of(context);
+    final s = S.of(context); // await 之前先取得
     try {
       final bytes = await ImagePickService.pick(source);
       if (bytes == null || !mounted) return; // 使用者取消
       final ok = await _controller.addImageFromBytes(bytes);
       if (!ok && mounted) {
-        messenger.showSnackBar(const SnackBar(content: Text('無法載入這張圖片')));
+        messenger.showSnackBar(
+          SnackBar(content: Text(s.imageLoadFailed)),
+        );
       }
     } catch (e) {
       if (mounted) {
-        messenger.showSnackBar(SnackBar(content: Text('選取圖片失敗：$e')));
+        messenger.showSnackBar(
+          SnackBar(content: Text(s.imagePickFailed(e))),
+        );
       }
     }
   }
 
   /// 頁面清單按鈕：列出所有頁面，點選即跳轉
+  /// 頁面背景 (紙張顏色 / 格線)：可改目前頁或所有空白頁
+  Widget _buildPageBackgroundButton() {
+    return IconButton(
+      icon: Icon(Icons.grid_on_rounded, size: 20, color: context.appColors.toolbarIcon),
+      tooltip: S.of(context).pageBackground,
+      onPressed: () {
+        _controller.syncCurrentToFocus(); // 連續模式：以畫面上看到的頁面為「目前頁」
+        PageBackgroundSheet.show(context, _controller);
+      },
+    );
+  }
+
   Widget _buildPageListButton() {
     return IconButton(
-      icon: Icon(Icons.view_list_rounded, size: 20, color: Colors.grey[700]),
-      tooltip: '頁面列表',
+      icon: Icon(Icons.view_list_rounded, size: 20, color: context.appColors.toolbarIcon),
+      tooltip: S.of(context).pageList,
       onPressed: _showPageListDialog,
     );
   }
@@ -719,11 +752,12 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
   }
 
   Widget _buildMoreMenu() {
+    final s = S.of(context);
     final canDelete = _controller.canDeleteCurrentPage;
     return PopupMenuButton<String>(
-      tooltip: '更多',
+      tooltip: s.more,
       padding: EdgeInsets.zero,
-      icon: Icon(Icons.more_vert, size: 20, color: Colors.grey[700]),
+      icon: Icon(Icons.more_vert, size: 20, color: context.appColors.toolbarIcon),
       onSelected: (value) {
         if (value == 'export_pdf') {
           _exportPdf();
@@ -745,28 +779,28 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text('頁面顯示方式', style: const TextStyle(fontSize: 13)),
+                child: Text(s.pageLayout, style: const TextStyle(fontSize: 13)),
               ),
               Text(
                 _controller.layoutMode.label,
-                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                style: TextStyle(fontSize: 11, color: context.cs.onSurfaceVariant),
               ),
               Icon(Icons.chevron_right, size: 18, color: Colors.grey[500]),
             ],
           ),
         ),
         const PopupMenuDivider(),
-        const PopupMenuItem<String>(
+        PopupMenuItem<String>(
           value: 'export_pdf',
           child: Row(
             children: [
-              Icon(
+              const Icon(
                 Icons.picture_as_pdf_outlined,
                 size: 18,
                 color: Colors.blueAccent,
               ),
-              SizedBox(width: 10),
-              Text('匯出為 PDF', style: TextStyle(fontSize: 13)),
+              const SizedBox(width: 10),
+              Text(s.exportAsPdf, style: const TextStyle(fontSize: 13)),
             ],
           ),
         ),
@@ -783,7 +817,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
               ),
               const SizedBox(width: 10),
               Text(
-                canDelete ? '刪除當前頁面' : '刪除當前頁面 (至少保留一頁)',
+                canDelete ? s.deleteCurrentPage : s.deleteCurrentPageKeepOne,
                 style: TextStyle(
                   fontSize: 13,
                   color: canDelete ? Colors.redAccent : Colors.grey,
@@ -802,7 +836,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     final selected = await showDialog<PageLayoutMode>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: const Text('頁面顯示方式', style: TextStyle(fontSize: 16)),
+        title: Text(S.of(context).pageLayout, style: const TextStyle(fontSize: 16)),
         children: [
           for (final mode in PageLayoutMode.values)
             SimpleDialogOption(
@@ -831,11 +865,12 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
 
   Future<void> _exportPdf() async {
     final messenger = ScaffoldMessenger.of(context);
+    final s = S.of(context);
     _controller.saveCurrentPage();
     messenger.showSnackBar(
-      const SnackBar(
-        content: Text('正在合成向量 PDF...'),
-        duration: Duration(seconds: 1),
+      SnackBar(
+        content: Text(s.exportingPdf),
+        duration: const Duration(seconds: 1),
       ),
     );
 
@@ -843,7 +878,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
       _controller.currentNotebook,
     );
     if (success && mounted) {
-      messenger.showSnackBar(const SnackBar(content: Text('PDF 匯出成功！')));
+      messenger.showSnackBar(SnackBar(content: Text(s.pdfExported)));
     }
   }
 
@@ -851,16 +886,17 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     _controller.syncCurrentToFocus(); // 連續模式：刪除畫面上看到的那一頁
     if (!_controller.canDeleteCurrentPage) return;
     final pageNumber = _controller.currentPageIndex + 1;
+    final s = S.of(context);
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('刪除當前頁面'),
-        content: Text('確定要刪除第 $pageNumber 頁嗎？頁面上的筆跡會一併刪除，無法復原。'),
+        title: Text(s.deleteCurrentPage),
+        content: Text(s.confirmDeletePage(pageNumber)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
+            child: Text(s.cancel),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -868,7 +904,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
               foregroundColor: Colors.white,
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('刪除'),
+            child: Text(s.delete),
           ),
         ],
       ),
@@ -892,6 +928,8 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     final idx = _controller.focusPageIndex; // 單頁模式 = 目前頁
     final canPrev = idx > 0;
     final canNext = idx < _controller.totalPages - 1;
+    final s = S.of(context);
+    final cs = context.cs;
 
     // 與右側工具按鈕 (undo / redo / 更多…) 同大：圖示 20、點擊範圍 40
     const double iconSize = 20;
@@ -904,29 +942,29 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           iconSize: iconSize,
           padding: EdgeInsets.zero,
           constraints: btnConstraints,
-          tooltip: '上一頁',
+          tooltip: s.prevPage,
           icon: Icon(
             Icons.arrow_back_ios_new,
-            color: canPrev ? Colors.black87 : Colors.grey[400],
+            color: canPrev ? cs.onSurface : cs.onSurface.withAlpha(80),
           ),
           onPressed: canPrev ? _controller.previousPage : null,
         ),
         Text(
           '${idx + 1} / ${_controller.totalPages}',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w600,
             fontSize: 14,
-            color: Colors.black87,
+            color: cs.onSurface,
           ),
         ),
         IconButton(
           iconSize: iconSize,
           padding: EdgeInsets.zero,
           constraints: btnConstraints,
-          tooltip: '下一頁',
+          tooltip: s.nextPage,
           icon: Icon(
             Icons.arrow_forward_ios,
-            color: canNext ? Colors.black87 : Colors.grey[400],
+            color: canNext ? cs.onSurface : cs.onSurface.withAlpha(80),
           ),
           onPressed: canNext ? _controller.nextPage : null,
         ),
@@ -934,7 +972,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           padding: EdgeInsets.zero,
           iconSize: iconSize,
           icon: const Icon(Icons.add, color: Colors.blueAccent),
-          tooltip: '在此頁後插入...',
+          tooltip: s.insertAfterThisPage,
           onSelected: (value) async {
             if (value == 'blank') {
               _controller.insertBlankPageAfterCurrent();
@@ -946,13 +984,13 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
             }
           },
           itemBuilder: (ctx) => [
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'blank',
-              child: Text('在此頁後插入空白頁', style: TextStyle(fontSize: 13)),
+              child: Text(s.insertBlankAfter, style: const TextStyle(fontSize: 13)),
             ),
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'pdf',
-              child: Text('在此頁後插入 PDF...', style: TextStyle(fontSize: 13)),
+              child: Text(s.insertPdfAfter, style: const TextStyle(fontSize: 13)),
             ),
           ],
         ),

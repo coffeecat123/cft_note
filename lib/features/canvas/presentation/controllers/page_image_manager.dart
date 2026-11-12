@@ -22,16 +22,12 @@ class PageFocus {
 
 class PageImageManager {
   PageImageManager({
-    required Matrix4 Function() transform,
-    required Size Function() viewportSize,
-    required double Function() zoom, // 1.0 = 100%
-    required PageFocus? Function() focus,
-    required VoidCallback onChanged,
-  }) : _transform = transform,
-       _viewportSize = viewportSize,
-       _zoom = zoom,
-       _focus = focus,
-       _onChanged = onChanged;
+    required this._transform,
+    required this._viewportSize,
+    required this._zoom, // 1.0 = 100%
+    required this._focus,
+    required this._onChanged,
+  });
 
   final Matrix4 Function() _transform;
   final Size Function() _viewportSize;
