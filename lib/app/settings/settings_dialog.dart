@@ -1,12 +1,13 @@
 // lib/app/settings/settings_dialog.dart
 //
 // 全域設定視窗 (書架頁右上角的齒輪)。
-// 目前有：主題 (跟隨系統 / 淺色 / 深色)、語言 (跟隨系統 / 繁體中文 / English)。
+// 目前有：主題 (跟隨系統 / 淺色 / 深色)、語言 (跟隨系統 / 繁體中文 / English)、App 資訊按鈕。
 // 之後要加新設定：在 AppSettings 加欄位，然後在 [_SettingsBody] 多放一個 _Section 即可。
 import 'package:flutter/material.dart';
 
 import '../../core/i18n/app_strings.dart';
 import '../theme/app_theme.dart';
+import 'app_info.dart';
 import 'app_settings.dart';
 
 class SettingsDialog extends StatelessWidget {
@@ -106,6 +107,15 @@ class _SettingsBody extends StatelessWidget {
             ],
             selected: {settings.language},
             onSelectionChanged: (v) => settings.setLanguage(v.first),
+          ),
+        ),
+        const SizedBox(height: 20),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.info_outline, size: 18),
+            label: Text(s.appInfo),
+            onPressed: () => AppInfoDialog.show(context),
           ),
         ),
       ],

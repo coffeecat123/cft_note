@@ -3,7 +3,7 @@ description: "A new Flutter project."
 
 publish_to: 'none'
 
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ^3.13.7
@@ -22,6 +22,8 @@ dependencies:
   gal: ^3.0.0
   super_clipboard: ^0.10.0-dev.2
   image_picker: ^1.1.2
+  package_info_plus: ^10.2.2
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   flutter_launcher_icons: ^0.14.0

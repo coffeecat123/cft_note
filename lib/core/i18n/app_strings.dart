@@ -84,6 +84,10 @@ class S {
   String get languageEn => 'English';
   String get close => _t('關閉', 'Close');
 
+  // App 資訊
+  String get appInfo => _t('App 資訊', 'App info');
+  String get appVersion => _t('版本', 'Version');
+
   // ============================================================
   // 書架
   // ============================================================
