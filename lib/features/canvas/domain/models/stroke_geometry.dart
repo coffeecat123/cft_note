@@ -23,6 +23,39 @@ class StrokeSample {
   const StrokeSample(this.x, this.y, this.r);
 }
 
+/// 中心線的一段：二次貝茲曲線 (起點、控制點、終點) 或直線，附起訖半徑
+class StrokeSegment {
+  final double x0, y0, cx, cy, x1, y1, r0, r1;
+  final bool isLine;
+  const StrokeSegment.quad(
+      this.x0, this.y0, this.cx, this.cy, this.x1, this.y1, this.r0, this.r1)
+      : isLine = false;
+  const StrokeSegment.line(
+      this.x0, this.y0, this.x1, this.y1, this.r0, this.r1)
+      : cx = (x0 + x1) / 2,
+        cy = (y0 + y1) / 2,
+        isLine = true;
+
+  /// 在 t = 0.5 切成兩段 (de Casteljau)，用來處理半徑變化太大的段落
+  (StrokeSegment, StrokeSegment) split() {
+    final rm = (r0 + r1) / 2;
+    if (isLine) {
+      final mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+      return (
+        StrokeSegment.line(x0, y0, mx, my, r0, rm),
+        StrokeSegment.line(mx, my, x1, y1, rm, r1),
+      );
+    }
+    final ax = (x0 + cx) / 2, ay = (y0 + cy) / 2;
+    final bx = (cx + x1) / 2, by = (cy + y1) / 2;
+    final mx = (ax + bx) / 2, my = (ay + by) / 2;
+    return (
+      StrokeSegment.quad(x0, y0, ax, ay, mx, my, r0, rm),
+      StrokeSegment.quad(mx, my, bx, by, x1, y1, rm, r1),
+    );
+  }
+}
+
 class StrokeGeometry {
   StrokeGeometry._();
 
@@ -32,12 +65,11 @@ class StrokeGeometry {
     return v.toDouble().clamp(0.0, 1.0).toDouble();
   }
 
-  /// 產生中心線取樣。[stepScale] 越大取樣越疏 (PDF 匯出用，檔案較小)。
-  static List<StrokeSample> sample(
+  /// 步驟 1~3：去重 → 清收筆抖動 → [1,2,1] 平滑。回傳平滑後的點與半徑。
+  static ({List<double> xs, List<double> ys, List<double> rs}) _prepare(
     List<PointVector> pts,
-    BrushSettings s, {
-    double stepScale = 1.0,
-  }) {
+    BrushSettings s,
+  ) {
     final double size = s.size;
     final double thinning = s.thinning;
 
@@ -62,8 +94,6 @@ class StrokeGeometry {
       ys.add(y);
       rs.add(radiusOf(_pressureOf(p)));
     }
-    if (xs.isEmpty) return const <StrokeSample>[];
-    if (xs.length == 1) return [StrokeSample(xs[0], ys[0], rs[0])];
 
     // ---- 2. 清掉收筆抖動 ---------------------------------------------------
     // 手指離開螢幕前，最後幾點常常是「很短、而且往回折」的雜訊。
@@ -109,6 +139,50 @@ class StrokeGeometry {
       rs[0] = rs[1];
       rs[rs.length - 1] = rs[rs.length - 2];
     }
+
+    return (xs: xs, ys: ys, rs: rs);
+  }
+
+  /// 中心線的「二次貝茲曲線」表示 (PDF 匯出用)。
+  /// 與 [sample] 使用同一份平滑後的點、同樣的「中點為端點、原始點為控制點」，
+  /// 所以形狀與畫面一致，但只需要少數幾個控制點，不必密集取樣。
+  static List<StrokeSegment> curve(List<PointVector> pts, BrushSettings s) {
+    final prep = _prepare(pts, s);
+    final xs = prep.xs, ys = prep.ys, rs = prep.rs;
+    final n = xs.length;
+    if (n == 0) return const <StrokeSegment>[];
+    if (n == 1) {
+      return [StrokeSegment.line(xs[0], ys[0], xs[0], ys[0], rs[0], rs[0])];
+    }
+    if (n == 2) {
+      return [StrokeSegment.line(xs[0], ys[0], xs[1], ys[1], rs[0], rs[1])];
+    }
+    final out = <StrokeSegment>[];
+    double px = xs[0], py = ys[0], pr = rs[0];
+    for (int i = 1; i <= n - 2; i++) {
+      final ex = (xs[i] + xs[i + 1]) / 2;
+      final ey = (ys[i] + ys[i + 1]) / 2;
+      final er = (rs[i] + rs[i + 1]) / 2;
+      out.add(StrokeSegment.quad(px, py, xs[i], ys[i], ex, ey, pr, er));
+      px = ex;
+      py = ey;
+      pr = er;
+    }
+    out.add(StrokeSegment.line(px, py, xs[n - 1], ys[n - 1], pr, rs[n - 1]));
+    return out;
+  }
+
+  /// 產生中心線取樣。[stepScale] 越大取樣越疏 (PDF 匯出用，檔案較小)。
+  static List<StrokeSample> sample(
+    List<PointVector> pts,
+    BrushSettings s, {
+    double stepScale = 1.0,
+  }) {
+    final double size = s.size;
+    final prep = _prepare(pts, s);
+    final xs = prep.xs, ys = prep.ys, rs = prep.rs;
+    if (xs.isEmpty) return const <StrokeSample>[];
+    if (xs.length == 1) return [StrokeSample(xs[0], ys[0], rs[0])];
 
     // ---- 4. 沿平滑曲線取樣 -------------------------------------------------
     final double step = math.max(0.3, size * 0.18) * stepScale;
@@ -192,6 +266,61 @@ class StrokeGeometry {
       }
     }
     return pts;
+  }
+
+  /// 單一緞帶多邊形 (左緣往前、右緣往回)：相鄰橫截面共用邊，因此沒有楔形縫隙。
+  /// 轉角處用平均法線 (miter，限制最大延伸)；轉彎很急、緞帶內側可能自我交疊的地方，
+  /// 由呼叫端在該取樣點另外補一個圓蓋住。用於 PDF 匯出，檔案大小接近一個多邊形。
+  static List<Offset> ribbonPolygon(List<StrokeSample> samples) {
+    final pts = <StrokeSample>[];
+    for (final p in samples) {
+      if (pts.isEmpty) {
+        pts.add(p);
+      } else {
+        final dx = p.x - pts.last.x, dy = p.y - pts.last.y;
+        if (dx * dx + dy * dy > 1e-12) pts.add(p);
+      }
+    }
+    final n = pts.length;
+    if (n < 2) return const <Offset>[];
+
+    final nxs = List<double>.filled(n - 1, 0);
+    final nys = List<double>.filled(n - 1, 0);
+    for (int i = 0; i < n - 1; i++) {
+      final dx = pts[i + 1].x - pts[i].x, dy = pts[i + 1].y - pts[i].y;
+      final len = math.sqrt(dx * dx + dy * dy);
+      nxs[i] = -dy / len;
+      nys[i] = dx / len;
+    }
+
+    final left = <Offset>[];
+    final right = <Offset>[];
+    for (int i = 0; i < n; i++) {
+      double nx, ny, scale = 1.0;
+      if (i == 0) {
+        nx = nxs[0];
+        ny = nys[0];
+      } else if (i == n - 1) {
+        nx = nxs[n - 2];
+        ny = nys[n - 2];
+      } else {
+        final ax = nxs[i - 1] + nxs[i], ay = nys[i - 1] + nys[i];
+        final l = math.sqrt(ax * ax + ay * ay);
+        if (l < 1e-6) {
+          nx = nxs[i];
+          ny = nys[i];
+        } else {
+          nx = ax / l;
+          ny = ay / l;
+          final c = nx * nxs[i] + ny * nys[i]; // cos(半轉角)
+          scale = 1.0 / math.max(c, 0.67);
+        }
+      }
+      final r = pts[i].r * scale;
+      left.add(Offset(pts[i].x + nx * r, pts[i].y + ny * r));
+      right.add(Offset(pts[i].x - nx * r, pts[i].y - ny * r));
+    }
+    return <Offset>[...left, ...right.reversed];
   }
 
   // 執行時自我校正：確認 Path.addOval 的繞向與「shoelace 面積為正」的多邊形相同。

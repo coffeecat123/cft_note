@@ -1,5 +1,6 @@
 // lib/features/pdf_import_export/services/pdf_export_service.dart
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' show Color, Offset, Rect, Size; // 使用原生 Offset / Rect / Size / Color
 import 'package:file_picker/file_picker.dart';
@@ -91,39 +92,74 @@ class PdfExportService {
         }
 
         // ============================================================
-        // 2. 向量筆跡疊加：使用 drawPolygon 直接注入多邊形向量曲線
+        // 2. 向量筆跡疊加：二次貝茲曲線 + 圓頭圓角粗線 (向量，無縫)
         // ============================================================
         for (final stroke in page.strokes) {
-          // 與畫面相同的取樣 (PDF 取樣稍疏以控制檔案大小)
-          final samples = StrokeGeometry.sample(
-            stroke.points,
-            stroke.settings,
-            stepScale: 1.5,
+          // 中心線 = 二次貝茲曲線 (與畫面同一份平滑結果)，控制點很少，檔案小。
+          final segs = StrokeGeometry.curve(stroke.points, stroke.settings);
+          if (segs.isEmpty) continue;
+
+          final color = stroke.color;
+          final pdfColor = PdfColor(
+            (color.r * 255.0).round().clamp(0, 255),
+            (color.g * 255.0).round().clamp(0, 255),
+            (color.b * 255.0).round().clamp(0, 255),
+            (color.a * 255.0).round().clamp(0, 255),
           );
 
-          if (samples.isNotEmpty) {
-            // ★ 修正 2：符合 Flutter 3.27+ 色彩標準，消除 red/green/blue 棄用警告
-            final color = stroke.color;
-            final r = (color.r * 255.0).round().clamp(0, 255);
-            final g = (color.g * 255.0).round().clamp(0, 255);
-            final b = (color.b * 255.0).round().clamp(0, 255);
-            final a = (color.a * 255.0).round().clamp(0, 255);
-            final pdfColor = PdfColor(r, g, b, a);
+          // 圓頭圓角的粗線：折返處是圓的、線段重疊所以沒有縫。
+          // 筆寬量化到 0.05，同寬度的筆共用，避免產生大量 PdfPen。
+          final pens = <int, PdfPen>{};
+          PdfPen penFor(double width) {
+            final key = math.max(1, (width * 20).round());
+            return pens.putIfAbsent(
+              key,
+              () => PdfPen(pdfColor, width: key / 20.0)
+                ..lineCap = PdfLineCap.round
+                ..lineJoin = PdfLineJoin.round,
+            );
+          }
 
-            // ★ 修正 1：直接呼叫 drawPolygon 畫入向量多邊形 (徹底告別 PdfPath 與 moveTo 錯誤)
-            // 圓 + 連接塊逐一填色，疊起來就是完整筆劃 (無缺口)
-            final brush = PdfSolidBrush(pdfColor);
-            for (int i = 0; i < samples.length; i++) {
-              final a = samples[i];
-              graphics.drawEllipse(
-                Rect.fromCircle(center: Offset(a.x, a.y), radius: a.r),
-                brush: brush,
-              );
-              if (i + 1 < samples.length) {
-                final quad = StrokeGeometry.segmentQuad(a, samples[i + 1]);
-                if (quad != null) graphics.drawPolygon(quad, brush: brush);
-              }
+          void drawSeg(StrokeSegment g, int depth) {
+            // 半徑起訖差太多 (壓力變化大)：對半切，讓每段的粗細近似固定
+            if (depth < 6 &&
+                (g.r1 - g.r0).abs() >
+                    math.max(0.05, math.max(g.r0, g.r1) * 0.06)) {
+              final (a, b) = g.split();
+              drawSeg(a, depth + 1);
+              drawSeg(b, depth + 1);
+              return;
             }
+            final p0 = Offset(g.x0, g.y0);
+            final p1 = Offset(g.x1, g.y1);
+            final pen = penFor(g.r0 + g.r1); // = 2 × 平均半徑
+            if (g.isLine) {
+              final dx = g.x1 - g.x0, dy = g.y1 - g.y0;
+              if (dx * dx + dy * dy < 1e-12) {
+                // 單點 (點一下)：畫圓
+                final r = (g.r0 + g.r1) / 2;
+                graphics.drawEllipse(
+                  Rect.fromCircle(center: p0, radius: r),
+                  brush: PdfSolidBrush(pdfColor),
+                );
+              } else {
+                graphics.drawLine(pen, p0, p1);
+              }
+            } else {
+              // 二次 → 三次貝茲 (PDF 只有三次)：控制點往 c 靠 2/3
+              final c = Offset(g.cx, g.cy);
+              graphics.drawBezier(
+                p0,
+                p0 + (c - p0) * (2 / 3),
+                p1 + (c - p1) * (2 / 3),
+                p1,
+                pen: pen,
+              );
+            }
+          }
+
+          for (final g in segs) {
+            drawSeg(g, 0);
           }
         }
       }

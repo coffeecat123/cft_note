@@ -1715,53 +1715,6 @@ class CanvasController extends ChangeNotifier {
   }
 
   // 3. 離地
-  /// 收筆保護 (剪尾)：手指離開螢幕前，最後幾個點常常只是微小抖動，
-  /// 方向甚至和筆劃前進方向相反。perfect_freehand 會跳過太近的中間點，
-  /// 但「最後一點」一定保留，於是輪廓在尾端急轉彎，補出一顆圓球 / 小鉤子。
-  /// 放大時抖動相對線條更明顯，所以更容易發生。
-  /// 這裡把「太短」或「折返」的尾端點剪掉 (門檻跟筆寬成比例，與縮放無關)。
-  void _trimStrokeTail(List<PointVector> pts, double brushSize) {
-    final double minLen = brushSize * 0.35;
-    final double minLen2 = minLen * minLen;
-    int guard = 8; // 最多剪 8 點，避免誤砍整條線
-    while (pts.length > 2 && guard-- > 0) {
-      final a = pts[pts.length - 3];
-      final b = pts[pts.length - 2];
-      final c = pts[pts.length - 1];
-      final v1x = b.x - a.x, v1y = b.y - a.y;
-      final v2x = c.x - b.x, v2y = c.y - b.y;
-      final len2 = v2x * v2x + v2y * v2y;
-      final dot = v1x * v2x + v1y * v2y;
-      final tooShort = len2 < minLen2;
-      final reversed = dot < 0;
-      if (tooShort || reversed) {
-        pts.removeLast();
-      } else {
-        break;
-      }
-    }
-  }
-
-  /// 收筆保護：手指/觸控筆離開螢幕前，壓力常常會瞬間掉落或亂跳，
-  /// 而 perfect_freehand 的收尾圓帽是用「最後一點的壓力」算半徑，
-  /// 結果線尾變細、尾端卻冒出一顆大圓球。
-  /// 這裡把最後幾個點的壓力統一成「尾段之前」的穩定壓力，線身與圓帽就一致。
-  void _stabilizeStrokeTail(List<PointVector> pts) {
-    const int tail = 4; // 要修正的尾端點數
-    if (pts.length < tail + 2) return;
-    final int stableEnd = pts.length - tail; // 尾段之前的點 [0, stableEnd)
-    double sum = 0;
-    int n = 0;
-    for (int i = stableEnd - 1; i >= 0 && n < 3; i--, n++) {
-      sum += pts[i].pressure ?? 0.5;
-    }
-    final double stable = sum / n;
-    for (int i = stableEnd; i < pts.length; i++) {
-      final p = pts[i];
-      pts[i] = PointVector(p.x, p.y, stable);
-    }
-  }
-
   void onPointerUp(int pointerId) {
     // ★★★ 核心觸發：瞬間雙指輕點 (時間 < 250ms 且無位移無捏合) ★★★
     if (_twoFingerTapCandidate && _twoFingerDownTime != null) {
@@ -1794,8 +1747,6 @@ class CanvasController extends ChangeNotifier {
       if (currentTool == DrawingTool.image) {
         _imageUp();
       } else if (currentTool == DrawingTool.pen && _currentPoints.isNotEmpty) {
-        _trimStrokeTail(_currentPoints, brush.size);
-        _stabilizeStrokeTail(_currentPoints);
         final stroke = Stroke(
           points: List.from(_currentPoints),
           color: strokeColor,
