@@ -39,7 +39,27 @@ class NotebookThumbnail extends StatefulWidget {
 class _NotebookThumbnailState extends State<NotebookThumbnail> {
   ui.Image? _rendered; // 自己渲染的 PDF 縮圖 (需自行釋放)
   String? _renderedKey;
+  String? _renderedPageKey; // _rendered 屬於哪一頁 (pdf 檔#頁碼)；換頁 / 換筆記本後不可沿用
   String? _loadingKey;
+
+  static String? _pageKeyOf(NotePage? p) =>
+      (p == null || p.pdfFilePath == null || p.pdfPageNumber == null)
+          ? null
+          : '${p.pdfFilePath}#${p.pdfPageNumber}';
+
+  @override
+  void didUpdateWidget(covariant NotebookThumbnail old) {
+    super.didUpdateWidget(old);
+    // 書架重排 / 新增副本時，State 可能被位置重用給另一本筆記本：
+    // 舊的縮圖不屬於新的第一頁就立刻丟掉，避免顯示成別本的圖示
+    if (_renderedPageKey != _pageKeyOf(_first)) {
+      _rendered?.dispose();
+      _rendered = null;
+      _renderedKey = null;
+      _renderedPageKey = null;
+      _loadingKey = null;
+    }
+  }
 
   NotePage? get _first =>
       widget.notebook.pages.isEmpty ? null : widget.notebook.pages.first;
@@ -60,7 +80,8 @@ class _NotebookThumbnailState extends State<NotebookThumbnail> {
       return;
     }
     final dpr = MediaQuery.of(context).devicePixelRatio;
-    final key = '${page.pdfFilePath}#${page.pdfPageNumber}'
+    final pageKey = _pageKeyOf(page)!;
+    final key = '$pageKey'
         '@${widget.logicalWidth.round()}x${dpr.toStringAsFixed(1)}';
     if (_renderedKey == key || _loadingKey == key) return;
     _loadingKey = key;
@@ -77,10 +98,16 @@ class _NotebookThumbnailState extends State<NotebookThumbnail> {
       img.dispose();
       return;
     }
+    // 等待渲染期間第一頁已換成別的 → 這張圖沒人要了
+    if (_pageKeyOf(_first) != pageKey) {
+      img.dispose();
+      return;
+    }
     final old = _rendered;
     setState(() {
       _rendered = img;
       _renderedKey = key;
+      _renderedPageKey = pageKey;
     });
     old?.dispose();
   }
@@ -92,11 +119,13 @@ class _NotebookThumbnailState extends State<NotebookThumbnail> {
       return const ColoredBox(color: Colors.white);
     }
     _ensureRendered();
+    // 只有「屬於這一頁」的自繪縮圖才能用；空白頁絕不使用
+    final own = _renderedPageKey == _pageKeyOf(page) ? _rendered : null;
     return RepaintBoundary(
       child: CustomPaint(
         painter: _FirstPagePainter(
           page: page,
-          bg: page.cachedBackgroundImage ?? _rendered,
+          bg: page.cachedBackgroundImage ?? own,
           strokeCount: page.strokes.length,
           stamp: widget.notebook.updatedAt,
         ),

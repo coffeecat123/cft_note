@@ -10,6 +10,7 @@ import '../../canvas/domain/models/stroke_geometry.dart';
 import '../../document/data/page_image_store.dart';
 import '../../document/domain/page_background.dart';
 import '../../shelf/domain/models/notebook.dart';
+import 'pdf_service.dart';
 
 class PdfExportService {
   static PdfColor _pdfColor(Color c) => PdfColor(
@@ -70,9 +71,10 @@ class PdfExportService {
         // ============================================================
         if (page.pdfFilePath != null &&
             page.pdfPageNumber != null &&
-            File(page.pdfFilePath!).existsSync()) {
+            await PdfService.exists(page.pdfFilePath!)) {
           if (!openedOriginalPdfs.containsKey(page.pdfFilePath!)) {
-            final bytes = await File(page.pdfFilePath!).readAsBytes();
+            final bytes = await File(await PdfService.resolvePath(page.pdfFilePath!))
+                .readAsBytes();
             openedOriginalPdfs[page.pdfFilePath!] = PdfDocument(inputBytes: bytes);
           }
           final originalDoc = openedOriginalPdfs[page.pdfFilePath!]!;

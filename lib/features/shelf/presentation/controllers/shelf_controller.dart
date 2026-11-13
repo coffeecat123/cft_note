@@ -473,6 +473,7 @@ class ShelfController extends ChangeNotifier {
     };
     for (final path in candidates.difference(stillUsed)) {
       await PdfService.evictDocument(path);
+      await PdfService.deleteManaged(path); // 倉庫內已沒人引用 → 刪檔回收空間
     }
   }
 }

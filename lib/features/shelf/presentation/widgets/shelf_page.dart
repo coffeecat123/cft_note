@@ -849,7 +849,11 @@ class _ShelfPageState extends State<ShelfPage> {
         borderRadius: radius,
         child: Padding(
           padding: const EdgeInsets.only(left: 3),
-          child: NotebookThumbnail(notebook: nb, logicalWidth: w),
+          child: NotebookThumbnail(
+            key: ValueKey('thumb_${nb.id}'),
+            notebook: nb,
+            logicalWidth: w,
+          ),
         ),
       ),
     );

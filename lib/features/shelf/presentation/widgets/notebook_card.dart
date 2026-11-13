@@ -66,6 +66,7 @@ class NotebookCard extends StatelessWidget {
                               right: 0,
                               bottom: 0,
                               child: NotebookThumbnail(
+                                key: ValueKey('thumb_${notebook.id}'),
                                 notebook: notebook,
                                 logicalWidth: box.maxWidth,
                               ),

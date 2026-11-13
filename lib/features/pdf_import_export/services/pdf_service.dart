@@ -1,9 +1,11 @@
 // lib/features/pdf_import_export/services/pdf_service.dart
+import 'dart:io';
 import 'dart:math' show max;
 import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart' show Color;
+import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../../core/engine/tile_planner.dart';
@@ -33,12 +35,92 @@ class PdfTile {
 }
 
 class PdfService {
+  // ------------------------------------------------------------
+  // App 內建 PDF 倉庫
+  //  匯入時把 PDF 複製到 <文件目錄>/cft_pdfs/，筆記只記「檔名」(不含目錄)。
+  //  這樣原檔被移動 / 刪除、或 iOS 重裝後容器路徑改變，筆記都不會變空白。
+  //  內容完全相同的 PDF 只存一份，多本筆記共用同一個檔案。
+  // ------------------------------------------------------------
+  static const String _dirName = 'cft_pdfs';
+  static Future<Directory>? _dirFuture;
+  static int _seq = 0;
+
+  static Future<Directory> _dir() => _dirFuture ??= () async {
+        final docs = await getApplicationDocumentsDirectory();
+        final dir = Directory('${docs.path}${Platform.pathSeparator}$_dirName');
+        if (!await dir.exists()) await dir.create(recursive: true);
+        return dir;
+      }();
+
+  /// 只取檔名部分 (防止任何殘留的路徑跑出倉庫資料夾)
+  static String _nameOnly(String stored) => stored.split(RegExp(r'[/\\]')).last;
+
+  /// 把筆記裡存的 pdfFilePath (倉庫檔名) 轉成實際檔案路徑
+  static Future<String> resolvePath(String stored) async {
+    final dir = await _dir();
+    return '${dir.path}${Platform.pathSeparator}${_nameOnly(stored)}';
+  }
+
+  /// 該 PDF 檔目前是否還在磁碟上
+  static Future<bool> exists(String stored) async =>
+      File(await resolvePath(stored)).exists();
+
+  /// 兩個檔案的位元組是否完全相同
+  static Future<bool> _sameContent(File a, File b) async {
+    final ra = await a.open();
+    final rb = await b.open();
+    try {
+      const chunk = 64 * 1024;
+      while (true) {
+        final x = await ra.read(chunk);
+        final y = await rb.read(chunk);
+        if (x.length != y.length) return false;
+        if (x.isEmpty) return true;
+        for (int i = 0; i < x.length; i++) {
+          if (x[i] != y[i]) return false;
+        }
+      }
+    } finally {
+      await ra.close();
+      await rb.close();
+    }
+  }
+
+  /// 把使用者挑的 PDF 放進 App 倉庫，回傳倉庫內的檔名。
+  /// 倉庫裡已有內容完全相同的檔案 → 直接沿用，不再複製。
+  static Future<String> _importCopy(String sourcePath) async {
+    final dir = await _dir();
+    final src = File(sourcePath);
+    final srcLen = await src.length();
+
+    await for (final e in dir.list(followLinks: false)) {
+      if (e is! File || !e.path.toLowerCase().endsWith('.pdf')) continue;
+      if (await e.length() != srcLen) continue; // 先比大小，快速排除
+      if (await _sameContent(src, e)) return _nameOnly(e.path);
+    }
+
+    final name = 'pdf_${DateTime.now().microsecondsSinceEpoch}_${_seq++}.pdf';
+    await src.copy('${dir.path}${Platform.pathSeparator}$name');
+    return name;
+  }
+
+  /// 刪除倉庫內的 PDF 檔
+  static Future<void> deleteManaged(String stored) async {
+    try {
+      final f = File(await resolvePath(stored));
+      if (await f.exists()) await f.delete();
+    } catch (e) {
+      debugPrint('deleteManaged failed: $e');
+    }
+  }
+
   // ★ 快取已開啟的 PDF 實例 (快取 Future：同時多個請求只會開一次，不會重複開檔而洩漏)
+  //   key 為筆記裡存的 pdfFilePath (檔名或舊版絕對路徑)
   static final Map<String, Future<PdfDocument>> _docCache = {};
 
   static Future<PdfDocument> _getDocument(String filePath) {
     return _docCache.putIfAbsent(filePath, () {
-      final future = PdfDocument.openFile(filePath);
+      final future = resolvePath(filePath).then(PdfDocument.openFile);
       // 開檔失敗不要把失敗結果永遠留在快取裡
       future.then<void>((_) {}, onError: (Object e) {
         _docCache.remove(filePath); // 呼叫端自己 await future 時仍會收到錯誤
@@ -90,12 +172,22 @@ class PdfService {
 
     if (files.isEmpty || files.first.path == null) return null;
 
-    final String filePath = files.first.path!;
     final String title = files.first.name.replaceFirst(
       RegExp(r'\.pdf$', caseSensitive: false),
       '',
     );
-    final document = await _getDocument(filePath);
+    // ★ 先複製進 App 倉庫，之後一律用倉庫內的檔名
+    final String filePath = await _importCopy(files.first.path!);
+    final PdfDocument document;
+    try {
+      document = await _getDocument(filePath);
+    } catch (e) {
+      // 不是有效 PDF / 開檔失敗：不要在倉庫留下垃圾檔
+      // (沿用的相同檔案一定曾開啟成功，不會走到這裡)
+      _docCache.remove(filePath);
+      await deleteManaged(filePath);
+      rethrow;
+    }
     final List<PdfPageData> pageDataList = [];
 
     // ★ 初始第 1 頁以 DPR 渲染，保證一打開就點對點清晰；超大頁面會被記憶體上限壓低
