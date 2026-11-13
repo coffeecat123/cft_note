@@ -478,6 +478,11 @@ class CanvasController extends ChangeNotifier {
   Timer? _lassoLongPressTimer; // 空白處長按 → 顯示「貼上」
   Offset _lassoDownScreen = Offset.zero;
   bool _selectionDragStarted = false;
+  // 防誤觸下手指在套索圈外：單指平移畫布 (沒移動就放開 = 點一下取消選取；按住 = 長按貼上)
+  bool _isLassoPanning = false;
+  bool _lassoPanMoved = false;
+  // 同一組選取連續換色 → 合併成一筆 Undo (換完才算一筆，不會塞滿歷史)
+  ChangeStrokesColorCommand? _colorSession;
   LassoMenuKind lassoMenu = LassoMenuKind.none;
   Offset lassoMenuAnchor = Offset.zero; // 螢幕座標 (選單出現位置)
   bool lassoMenuCanPasteStrokes = false; // 貼上選單：套索剪貼簿有筆劃
@@ -1065,6 +1070,8 @@ class CanvasController extends ChangeNotifier {
     _lassoLongPressTimer?.cancel();
     _currentLassoDrawing.clear();
     _isPotentialNewLasso = false;
+    _isLassoPanning = false;
+    _lassoPanMoved = false;
     if (_isDraggingSelection && _selectionDragStarted && _totalDragDelta != Offset.zero) {
       final back = -_totalDragDelta;
       for (final stroke in _selectedStrokes) {
@@ -1126,6 +1133,7 @@ class CanvasController extends ChangeNotifier {
     _isDraggingSelection = false;
     _selectionDragStarted = false;
     _isPotentialNewLasso = false;
+    _colorSession = null;
     lassoMenu = LassoMenuKind.none;
     _selectedImage = null; // 圖片模式的選取也一併清掉
     _imageOp = _ImageOp.none;
@@ -1178,16 +1186,28 @@ class CanvasController extends ChangeNotifier {
     _schedulePrefsSave();
 
     if (_selectedStrokes.isNotEmpty && _colorChangeInitialStrokes != null) {
-      // 只有顏色真的不同時才產生 Undo 指令
-      if (_colorChangeInitialStrokes!.first.color != finalColor) {
-        _undoStack.add(
-          ChangeStrokesColorCommand(
-            _colorChangeInitialStrokes!,
-            List.from(_selectedStrokes),
-          ),
+      // 同一組選取連續換色：只在「第一次」開一筆 Undo，之後都更新那一筆
+      // (原色 = 第一次換色前的顏色；最後換回原色就整筆撤掉)
+      final session = _colorSession;
+      final inSession = session != null &&
+          _undoStack.isNotEmpty &&
+          identical(_undoStack.last, session);
+      final originals =
+          inSession ? session.oldStrokes : _colorChangeInitialStrokes!;
+      final changed = originals.any((s) => s.color != finalColor);
+
+      if (inSession) _undoStack.removeLast();
+      if (changed) {
+        final cmd = ChangeStrokesColorCommand(
+          originals,
+          List.from(_selectedStrokes),
         );
+        _undoStack.add(cmd);
+        _colorSession = cmd;
         _redoStack.clear();
-        _recordRecentColor(finalColor); // 此時才加入最近使用
+        _recordRecentColor(finalColor);
+      } else {
+        _colorSession = null;
       }
       _colorChangeInitialStrokes = null;
       _markDirty();
@@ -1611,6 +1631,16 @@ class CanvasController extends ChangeNotifier {
     }
     _touchIds.clear();
     _isTouchPanning = false;
+    // 套索：手掌 (手指) 造成的平移 / 長按作廢；拖曳到一半的就收尾
+    _isLassoPanning = false;
+    _lassoPanMoved = false;
+    _lassoLongPressTimer?.cancel();
+    _isPotentialNewLasso = false;
+    if (_isDraggingSelection) {
+      if (_selectionDragStarted) _pushSelectionMoveCommand();
+      _isDraggingSelection = false;
+      _selectionDragStarted = false;
+    }
     _twoFingerTapCandidate = false;
     _previousDistance = 0.0;
     if (_isScalingLocked) {
@@ -1679,16 +1709,21 @@ class CanvasController extends ChangeNotifier {
         }
         _touchIds.add(pointerId);
         if (_touchIds.length == 1) {
-          // 單指：只平移，不畫也不選取
           _pointerPositions[pointerId] = position;
           _gestureCancelled = false;
-          _isTouchPanning = true;
-          _touchPanLast = position;
-          lassoMenu = LassoMenuKind.none;
-          return;
+          if (currentTool != DrawingTool.lasso) {
+            // 單指：只平移，不畫也不選取
+            _isTouchPanning = true;
+            _touchPanLast = position;
+            lassoMenu = LassoMenuKind.none;
+            return;
+          }
+          // 套索：手指不能畫圈，但圈內可拖曳 / 點一下開選單，
+          // 圈外平移畫布、點一下取消選取、長按貼上 → 走下面的套索流程
+        } else {
+          // 第二根手指：停止單指平移，交給下面的雙指縮放流程
+          _isTouchPanning = false;
         }
-        // 第二根手指：停止單指平移，交給下面的雙指縮放流程
-        _isTouchPanning = false;
       } else {
         _dropTouchesForPen();
         _penIds.add(pointerId);
@@ -1704,6 +1739,14 @@ class CanvasController extends ChangeNotifier {
       _currentLassoDrawing.clear();
       _isPotentialNewLasso = false;
       _lassoLongPressTimer?.cancel();
+      _isLassoPanning = false;
+      _lassoPanMoved = false;
+      if (_isDraggingSelection) {
+        // 拖曳到一半被第二根手指打斷：已經移動的部分照樣記一筆
+        if (_selectionDragStarted) _pushSelectionMoveCommand();
+        _isDraggingSelection = false;
+        _selectionDragStarted = false;
+      }
       lassoMenu = LassoMenuKind.none; // 縮放 / 平移時選單位置會失準，直接收起
       _isImagePanning = false;
       _suspendImageOp();
@@ -1772,6 +1815,12 @@ class CanvasController extends ChangeNotifier {
           _isPotentialNewLasso = true;
           _potentialLassoStart = scenePoint;
           _startLassoLongPress();
+          // 防誤觸下的手指：圈外 = 平移畫布 (套索的圈圈只能用 Pencil 畫)
+          if (palmRejection && kind == PointerDeviceKind.touch) {
+            _isLassoPanning = true;
+            _lassoPanMoved = false;
+            _touchPanLast = position;
+          }
         }
       } else if (currentTool == DrawingTool.image) {
         _imageDown(scenePoint);
@@ -1866,6 +1915,18 @@ class CanvasController extends ChangeNotifier {
             _selectedLassoPolygon[i] = _selectedLassoPolygon[i] + delta;
           }
           if (_selectedStrokes.isNotEmpty) _bakeHistoryToPicture();
+        } else if (_isLassoPanning) {
+          // 手指在容許範圍內微動仍算「按住」(長按貼上 / 點一下取消選取)
+          if (!_lassoPanMoved) {
+            if ((position - _lassoDownScreen).distance < _tapSlop) return;
+            _lassoPanMoved = true;
+            _lassoLongPressTimer?.cancel();
+            _isPotentialNewLasso = false; // 拖動了 → 不是「點一下取消選取」
+          }
+          final delta = position - _touchPanLast;
+          _touchPanLast = position;
+          if (delta != Offset.zero) _panViewBy(delta);
+          return;
         } else if (_isPotentialNewLasso) {
           // 手指在容許範圍內微動仍算「按住」，才能觸發長按貼上
           if ((position - _lassoDownScreen).distance < _tapSlop) return;
@@ -1985,8 +2046,11 @@ class CanvasController extends ChangeNotifier {
     _penIds.remove(pointerId);
     final bool wasTouchPan = _isTouchPanning;
     final bool wasImagePan = _isImagePanning && _imagePanTotal >= _tapSlop;
+    final bool wasLassoPan = _isLassoPanning && _lassoPanMoved;
     _isTouchPanning = false;
     _isImagePanning = false;
+    _isLassoPanning = false;
+    _lassoPanMoved = false;
 
     // ★★★ 核心觸發：瞬間雙指輕點 (時間 < 250ms 且無位移無捏合) ★★★
     if (_twoFingerTapCandidate && _twoFingerDownTime != null) {
@@ -2050,17 +2114,7 @@ class CanvasController extends ChangeNotifier {
       } else if (currentTool == DrawingTool.lasso) {
         if (_isDraggingSelection) {
           if (_selectionDragStarted) {
-            if (_totalDragDelta != Offset.zero && _hasSelectedContent) {
-              final cmds = <CanvasCommand>[
-                if (_selectedStrokes.isNotEmpty)
-                  MoveStrokesCommand(List.from(_selectedStrokes), _totalDragDelta),
-                if (_selectedImages.isNotEmpty)
-                  MoveImagesCommand(List.from(_selectedImages), _totalDragDelta),
-              ];
-              _undoStack.add(cmds.length == 1 ? cmds.first : CompositeCommand(cmds));
-              _redoStack.clear();
-              _markDirty();
-            }
+            _pushSelectionMoveCommand();
           } else {
             // 在圈選範圍內「點一下」→ 顯示 剪下 / 複製 / 刪除 / 截圖；
             // 圈到的範圍內什麼都沒有時 (只當截圖框) 就只有「截圖」
@@ -2085,7 +2139,8 @@ class CanvasController extends ChangeNotifier {
     }
 
     if (_pointerPositions.isEmpty) {
-      final wasScaling = _isScalingLocked || wasTouchPan || wasImagePan;
+      final wasScaling =
+          _isScalingLocked || wasTouchPan || wasImagePan || wasLassoPan;
       _isScalingLocked = false;
       _viewMoving = false; // 下面的 notifyListeners 會讓筆劃切回向量
       _gestureCancelled = false;
@@ -2121,6 +2176,22 @@ class CanvasController extends ChangeNotifier {
   // ==========================================
   // 套索選單動作：複製 / 剪下 / 刪除 / 貼上 / 截圖
   // ==========================================
+  /// 把這次拖曳選取內容的位移記成一筆 Undo
+  void _pushSelectionMoveCommand() {
+    if (_totalDragDelta == Offset.zero || !_hasSelectedContent) return;
+    final cmds = <CanvasCommand>[
+      if (_selectedStrokes.isNotEmpty)
+        MoveStrokesCommand(List.from(_selectedStrokes), _totalDragDelta),
+      if (_selectedImages.isNotEmpty)
+        MoveImagesCommand(List.from(_selectedImages), _totalDragDelta),
+    ];
+    _undoStack.add(cmds.length == 1 ? cmds.first : CompositeCommand(cmds));
+    _redoStack.clear();
+    _colorSession = null; // 位移之後再換色是新的一筆
+    _totalDragDelta = Offset.zero;
+    _markDirty();
+  }
+
   /// 套索工具在空白處按住：剪貼簿有內容時，時間到就浮出「貼上」
   void _startLassoLongPress() {
     _lassoLongPressTimer?.cancel();
@@ -2145,6 +2216,9 @@ class CanvasController extends ChangeNotifier {
       lassoMenuCanPasteStrokes = hasClipboard;
       lassoMenuCanPasteImage = hasImage;
       _pasteScenePoint = point;
+      // 長按已經處理完：放開時不要再被當成「點一下取消選取」而把選單關掉
+      _isPotentialNewLasso = false;
+      _isLassoPanning = false;
       HapticFeedback.selectionClick();
       notifyListeners();
     });
@@ -2337,6 +2411,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   void _calculateLassoSelection() {
+    _colorSession = null; // 新的選取 → 換色重新算一筆
     _selectedStrokes.clear();
     _selectedImages.clear();
 
