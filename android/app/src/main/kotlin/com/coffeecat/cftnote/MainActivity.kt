@@ -1,4 +1,4 @@
-package com.example.cft_note
+package com.coffeecat.cftnote
 
 import io.flutter.embedding.android.FlutterActivity
 

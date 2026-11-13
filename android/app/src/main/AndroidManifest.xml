@@ -33,7 +33,7 @@
             android:value="2" />
         <provider
             android:name="com.superlist.super_native_extensions.DataProvider"
-            android:authorities="com.example.cft_note.SuperClipboardDataProvider"
+            android:authorities="${applicationId}.SuperClipboardDataProvider"
             android:exported="true"
             android:grantUriPermissions="true" />
     </application>

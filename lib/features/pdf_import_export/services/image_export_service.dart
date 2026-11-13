@@ -75,8 +75,8 @@ class ImageExportService {
 
   /// 存到系統相簿 (「cft_note」相簿)；沒有權限或被拒絕回傳 false
   static Future<bool> saveToGallery(Uint8List bytes, String fileName) async {
-    if (!await Gal.hasAccess()) {
-      if (!await Gal.requestAccess()) return false;
+    if (!await Gal.hasPermission(toAlbum: true)) {
+      if (!await Gal.requestPermission(toAlbum: true)) return false;
     }
     final file = await _writeTemp(bytes, fileName);
     await Gal.putImage(file.path, album: 'cft_note');
