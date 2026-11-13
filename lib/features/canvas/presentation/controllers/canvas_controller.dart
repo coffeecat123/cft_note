@@ -32,6 +32,14 @@ import 'region_capture.dart';
 enum _ImageOp { none, move, resize, delete }
 
 // 2. 主畫布控制器 (CanvasController)
+/// 縮放 / 平移時用來取代向量筆劃的點陣快取。
+/// [image] 為 null 代表這一頁筆劃不多，直接畫向量就夠快。
+class StrokeRaster {
+  final ui.Picture source; // 烘焙來源：用 identity 判斷筆劃是否變動過
+  final ui.Image? image;
+  const StrokeRaster(this.source, this.image);
+}
+
 class CanvasController extends ChangeNotifier {
   bool _disposed = false;
   final List<Stroke> _historyStrokes = [];
@@ -268,13 +276,97 @@ class CanvasController extends ChangeNotifier {
     }
     transformation = Matrix4.translationValues(-dx, -dy, 0.0) * transformation;
     _syncVisiblePages();
+    _scrollInteracting = true;
     viewSignal.fire();
     _scrollSettleTimer?.cancel();
-    _scrollSettleTimer = Timer(const Duration(milliseconds: 150), refreshDetail);
+    _scrollSettleTimer = Timer(const Duration(milliseconds: 150), () {
+      _scrollInteracting = false;
+      refreshDetail();
+      viewSignal.fire(); // 停手後切回向量筆劃
+      _scheduleRasterRelease();
+    });
   }
 
   // ---- 非編輯頁的筆劃 Picture 快取 (編輯頁用 cachedHistoryPicture) ----
   final Map<NotePage, ui.Picture> _pagePictures = {};
+
+  // ---- 縮放 / 平移中的筆劃點陣快取 ----
+  // 向量 Picture 每一幀都要讓 GPU 重新填色全部筆劃；筆劃一多，縮放就會掉幀。
+  // 互動中 (雙指縮放 / 平移 / 滾輪) 改畫「整頁筆劃的點陣圖」，成本與筆劃數量無關；
+  // 停手後立刻切回向量，所以靜止時依然銳利。
+  static const int _rasterMinPoints = 3000; // 少於這麼多點的頁面直接畫向量
+  static const int _rasterMaxPages = 8;
+  final Map<NotePage, StrokeRaster> _rasters = {};
+  Timer? _rasterReleaseTimer;
+  bool _viewMoving = false; // 雙指真的在縮放 / 平移
+  bool _scrollInteracting = false; // 滾輪捲動中 (停手 150ms 後結束)
+
+  bool get isViewInteracting => _viewMoving || _scrollInteracting;
+
+  /// 互動中回傳該頁的筆劃點陣圖 (座標 = 頁面大小)；回傳 null 請直接畫向量。
+  ui.Image? rasterFor(int i) {
+    if (!isViewInteracting) return null;
+    if (i < 0 || i >= pages.length) return null;
+    final pic = pictureFor(i);
+    if (pic == null) return null;
+    final page = pages[i];
+
+    var r = _rasters.remove(page); // 取出再放回 = 最近使用排最後
+    if (r == null || !identical(r.source, pic)) {
+      r?.image?.dispose();
+      r = _bakeRaster(page, i, pic);
+    }
+    _rasters[page] = r;
+    _rasterReleaseTimer?.cancel();
+    while (_rasters.length > _rasterMaxPages) {
+      _rasters.remove(_rasters.keys.first)?.image?.dispose();
+    }
+    return r.image;
+  }
+
+  StrokeRaster _bakeRaster(NotePage page, int i, ui.Picture pic) {
+    final strokes = i == currentPageIndex ? _historyStrokes : page.strokes;
+    int cost = 0;
+    for (final st in strokes) {
+      cost += st.points.length;
+      if (cost >= _rasterMinPoints) break;
+    }
+    if (cost < _rasterMinPoints) return StrokeRaster(pic, null);
+
+    final w = page.width, h = page.height;
+    if (w <= 0 || h <= 0) return StrokeRaster(pic, null);
+    final dpr = ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
+    final zoom = max(1.0, zoomPercentage / 100);
+    final maxPixels = isContinuous ? 3e6 : 8e6; // 連續模式同時有多頁，每頁小一點
+    final scale = min(
+      dpr * zoom,
+      min(4096.0 / max(w, h), sqrt(maxPixels / (w * h))),
+    );
+    final pw = max(1, (w * scale).ceil());
+    final ph = max(1, (h * scale).ceil());
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.scale(pw / w, ph / h);
+    canvas.drawPicture(pic);
+    final baked = recorder.endRecording();
+    final image = baked.toImageSync(pw, ph);
+    _disposePictureLater(baked);
+    return StrokeRaster(pic, image);
+  }
+
+  void _scheduleRasterRelease() {
+    _rasterReleaseTimer?.cancel();
+    _rasterReleaseTimer = Timer(const Duration(seconds: 3), _disposeRasters);
+  }
+
+  void _disposeRasters() {
+    _rasterReleaseTimer?.cancel();
+    for (final r in _rasters.values) {
+      r.image?.dispose();
+    }
+    _rasters.clear();
+  }
 
   ui.Picture? pictureFor(int i) {
     if (i == currentPageIndex) return cachedHistoryPicture;
@@ -296,6 +388,7 @@ class CanvasController extends ChangeNotifier {
 
   void _dropPicture(NotePage page) {
     _disposePictureLater(_pagePictures.remove(page));
+    _rasters.remove(page)?.image?.dispose();
   }
 
   void _clearPictureCache() {
@@ -303,6 +396,7 @@ class CanvasController extends ChangeNotifier {
       _disposePictureLater(pic);
     }
     _pagePictures.clear();
+    _disposeRasters();
   }
 
   /// 快取太多時，丟掉不在 [keep] 內的頁面
@@ -657,6 +751,7 @@ class CanvasController extends ChangeNotifier {
     _saveCurrentPageState(); // ★ 核心修復：退出畫布時，立即把筆跡存回當前頁面！
     _zoomIndicatorTimer?.cancel();
     _scrollSettleTimer?.cancel();
+    _disposeRasters();
     _lassoLongPressTimer?.cancel();
     _clearPictureCache();
     activeRepaintNotifier.dispose();
@@ -1695,6 +1790,7 @@ class CanvasController extends ChangeNotifier {
             );
 
         transformation = deltaMatrix * transformation;
+        _viewMoving = true;
         if (isContinuous) _syncVisiblePages();
 
         // 顯示縮放膠囊
@@ -1815,12 +1911,14 @@ class CanvasController extends ChangeNotifier {
     if (_pointerPositions.isEmpty) {
       final wasScaling = _isScalingLocked;
       _isScalingLocked = false;
+      _viewMoving = false; // 下面的 notifyListeners 會讓筆劃切回向量
       _gestureCancelled = false;
       _previousDistance = 0.0;
 
       // ★ 雙指縮放放開時，自動向 pdfrx 索取高清渲染
       if (wasScaling) {
         refreshDetail();
+        _scheduleRasterRelease();
       }
       // ★ 手指全部離開後，倍率膠囊過一會兒自動消失 (文字訊息自己有計時器)
       if (showZoomIndicator && hudMessage == null) {

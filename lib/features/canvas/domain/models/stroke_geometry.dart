@@ -336,14 +336,37 @@ class StrokeGeometry {
       .contains(Offset.zero);
 
   /// 取樣點 → 填色用的 Path (圓 + 連接塊的聯集)
+  ///
+  /// 連接塊 (梯形) 每段都放；圓只放在「頭尾」與「有轉彎」的取樣點：
+  /// 轉彎處的圓負責補滿外側楔形缺口、讓圓弧與折返處是圓的；
+  /// 幾乎筆直的地方不需要圓。子形狀數量大幅減少，縮放 / 重繪時 GPU 負擔明顯降低。
   static Path buildPath(List<StrokeSample> samples) {
     final path = Path();
     if (samples.isEmpty) return path;
     final bool positive = _quadsPositive;
-    for (int i = 0; i < samples.length; i++) {
+    final int last = samples.length - 1;
+    for (int i = 0; i <= last; i++) {
       final a = samples[i];
-      path.addOval(Rect.fromCircle(center: Offset(a.x, a.y), radius: a.r));
-      if (i + 1 < samples.length) {
+
+      bool needCircle = i == 0 || i == last;
+      if (!needCircle) {
+        final p = samples[i - 1], b = samples[i + 1];
+        final v1x = a.x - p.x, v1y = a.y - p.y;
+        final v2x = b.x - a.x, v2y = b.y - a.y;
+        final l1 = v1x * v1x + v1y * v1y;
+        final l2 = v2x * v2x + v2y * v2y;
+        if (l1 < 1e-12 || l2 < 1e-12) {
+          needCircle = true; // 退化線段：保守起見補圓
+        } else {
+          final cosA = (v1x * v2x + v1y * v2y) / math.sqrt(l1 * l2);
+          needCircle = cosA < 0.99996; // 轉角大於約 0.5°
+        }
+      }
+      if (needCircle) {
+        path.addOval(Rect.fromCircle(center: Offset(a.x, a.y), radius: a.r));
+      }
+
+      if (i < last) {
         final quad = segmentQuad(a, samples[i + 1], positive: positive);
         if (quad != null) path.addPolygon(quad, true);
       }

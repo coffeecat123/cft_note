@@ -132,9 +132,21 @@ class HistoryLayerPainter extends CustomPainter {
     canvas.clipRect(pageRect);
 
     // 5. 繪製歷史手寫筆畫
-    final picture = controller.pictureFor(index);
-    if (picture != null) {
-      canvas.drawPicture(picture);
+    // 縮放 / 平移中：筆劃多的頁面改畫點陣快取 (成本與筆劃數量無關)；
+    // 停手後 rasterFor 回傳 null，自動切回向量，靜止時依然銳利。
+    final raster = controller.rasterFor(index);
+    if (raster != null) {
+      canvas.drawImageRect(
+        raster,
+        Rect.fromLTWH(0, 0, raster.width.toDouble(), raster.height.toDouble()),
+        pageRect,
+        Paint()..filterQuality = FilterQuality.low,
+      );
+    } else {
+      final picture = controller.pictureFor(index);
+      if (picture != null) {
+        canvas.drawPicture(picture);
+      }
     }
     canvas.restore();
   }
