@@ -591,6 +591,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                     e.pointer,
                     e.localPosition,
                     _normalizedPressure(e),
+                    kind: e.kind,
                   ),
                   onPointerMove: (e) => _controller.onPointerMove(
                     e.pointer,
@@ -859,6 +860,10 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           _confirmDeleteCurrentPage();
         } else if (value == 'layout') {
           _showLayoutModeDialog();
+        } else if (value == 'palm') {
+          _controller.togglePalmRejection();
+        } else if (value == 'clear_page') {
+          _confirmClearCurrentPage();
         }
       },
       itemBuilder: (ctx) => [
@@ -883,6 +888,34 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
             ],
           ),
         ),
+        PopupMenuItem<String>(
+          value: 'palm',
+          child: Row(
+            children: [
+              Icon(
+                Icons.pan_tool_alt_outlined,
+                size: 18,
+                color: _controller.palmRejection
+                    ? Colors.blueAccent
+                    : Colors.grey,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(s.palmRejection, style: const TextStyle(fontSize: 13)),
+              ),
+              Text(
+                _controller.palmRejection ? s.stateOn : s.stateOff,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: _controller.palmRejection
+                      ? Colors.blueAccent
+                      : context.cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
         const PopupMenuDivider(),
         PopupMenuItem<String>(
           value: 'export_pdf',
@@ -899,6 +932,23 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           ),
         ),
         const PopupMenuDivider(),
+        PopupMenuItem<String>(
+          value: 'clear_page',
+          child: Row(
+            children: [
+              const Icon(
+                Icons.cleaning_services_outlined,
+                size: 18,
+                color: Colors.orange,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                s.clearCurrentPage,
+                style: const TextStyle(fontSize: 13, color: Colors.orange),
+              ),
+            ],
+          ),
+        ),
         PopupMenuItem<String>(
           value: 'delete_page',
           enabled: canDelete,
@@ -973,6 +1023,38 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
     );
     if (success && mounted) {
       messenger.showSnackBar(SnackBar(content: Text(s.pdfExported)));
+    }
+  }
+
+  Future<void> _confirmClearCurrentPage() async {
+    _controller.syncCurrentToFocus(); // 連續模式：清除畫面上看到的那一頁
+    final pageNumber = _controller.currentPageIndex + 1;
+    final s = S.of(context);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.clearCurrentPage),
+        content: Text(s.confirmClearPage(pageNumber)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.cancel),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(s.clear),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      _controller.clearCurrentPageContent();
     }
   }
 

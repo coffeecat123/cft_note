@@ -381,6 +381,38 @@ class ShelfController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 直接把 PDF 匯入成新筆記本：每一頁 PDF 對應一頁，放在目前所在的資料夾
+  Future<Notebook> createNotebookFromPdf({
+    required String title,
+    required List<PdfPageData> pdfPages,
+  }) async {
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final newBook = Notebook(
+      id: Notebook.generateId(),
+      title: title.trim().isEmpty ? S.current.untitledNotebook : title.trim(),
+      coverColor: Notebook.presetCoverColors.first,
+      updatedAt: DateTime.now(),
+      folderId: currentFolderId,
+      pages: [
+        for (int i = 0; i < pdfPages.length; i++)
+          NotePage(
+            id: 'pdf_page_${stamp}_$i',
+            cachedBackgroundImage: pdfPages[i].initialImage,
+            width: pdfPages[i].width,
+            height: pdfPages[i].height,
+            pdfFilePath: pdfPages[i].filePath,
+            pdfPageNumber: pdfPages[i].pageNumber,
+            renderedScale: 1.0,
+          ),
+      ],
+    );
+    notebooks.insert(0, newBook);
+    _touchFolder(currentFolderId);
+    await _persist();
+    notifyListeners();
+    return newBook;
+  }
+
   Future<void> renameNotebook(String id, String newTitle) async {
     final index = notebooks.indexWhere((nb) => nb.id == id);
     if (index != -1 && newTitle.trim().isNotEmpty) {

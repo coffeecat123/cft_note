@@ -1,5 +1,6 @@
 // lib/features/shelf/presentation/widgets/shelf_page.dart
 import 'package:cft_note/features/pdf_import_export/services/pdf_export_service.dart';
+import 'package:cft_note/features/pdf_import_export/services/pdf_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -14,6 +15,7 @@ import '../controllers/shelf_controller.dart';
 import 'create_notebook_dialog.dart';
 import 'folder_card.dart';
 import 'notebook_card.dart';
+import 'notebook_thumbnail.dart';
 import 'shelf_list_row.dart';
 
 /// 拖曳時攜帶的資料：被拖的是筆記本還是資料夾
@@ -793,17 +795,7 @@ class _ShelfPageState extends State<ShelfPage> {
 
   Widget _buildNotebookRow(Notebook nb, bool showInfo) {
     final row = ShelfListRow(
-      leading: Container(
-        width: 20,
-        height: 26,
-        decoration: BoxDecoration(
-          color: nb.coverColor,
-          borderRadius: const BorderRadius.horizontal(
-            left: Radius.circular(2),
-            right: Radius.circular(5),
-          ),
-        ),
-      ),
+      leading: _buildNotebookListIcon(nb),
       name: nb.title,
       modifiedText: _formatDateTime(nb.updatedAt),
       infoText: S.of(context).pageCount(nb.pageCount),
@@ -824,6 +816,45 @@ class _ShelfPageState extends State<ShelfPage> {
     return _draggable(_DragItem(isFolder: false, id: nb.id, name: nb.title), row);
   }
 
+  /// 精簡清單的筆記本圖示：第一頁預覽圖 (左側保留封面色書脊)
+  Widget _buildNotebookListIcon(Notebook nb) {
+    const double maxW = 30;
+    const double maxH = 36;
+    final aspect = NotebookThumbnail.aspectOf(nb);
+    double w = maxH * aspect;
+    double h = maxH;
+    if (w > maxW) {
+      w = maxW;
+      h = maxW / aspect;
+    }
+    const radius = BorderRadius.horizontal(
+      left: Radius.circular(2),
+      right: Radius.circular(4),
+    );
+    return Container(
+      width: w,
+      height: h,
+      decoration: BoxDecoration(
+        color: nb.coverColor,
+        borderRadius: radius,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(40),
+            blurRadius: 2,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 3),
+          child: NotebookThumbnail(notebook: nb, logicalWidth: w),
+        ),
+      ),
+    );
+  }
+
   String _formatDateTime(DateTime d) {
     String p(int n) => n.toString().padLeft(2, '0');
     return '${d.year}/${p(d.month)}/${p(d.day)} ${p(d.hour)}:${p(d.minute)}';
@@ -837,7 +868,7 @@ class _ShelfPageState extends State<ShelfPage> {
     return PopupMenuButton<String>(
       tooltip: s.addEllipsis,
       offset: const Offset(0, 50),
-      onSelected: (val) {
+      onSelected: (val) async {
         if (val == 'notebook') {
           showDialog(
             context: context,
@@ -850,6 +881,8 @@ class _ShelfPageState extends State<ShelfPage> {
           );
         } else if (val == 'folder') {
           _showCreateFolderDialog();
+        } else if (val == 'pdf') {
+          await _importPdfAsNotebook();
         }
       },
       itemBuilder: (ctx) => [
@@ -873,9 +906,36 @@ class _ShelfPageState extends State<ShelfPage> {
             ],
           ),
         ),
+        PopupMenuItem(
+          value: 'pdf',
+          child: Row(
+            children: [
+              const Icon(Icons.picture_as_pdf_outlined, color: Colors.redAccent),
+              const SizedBox(width: 8),
+              Text(s.importPdf),
+            ],
+          ),
+        ),
       ],
       child: child,
     );
+  }
+
+  /// 選一個 PDF，直接建立成新筆記本 (以檔名為標題)，放在目前所在的資料夾
+  Future<void> _importPdfAsNotebook() async {
+    try {
+      final picked = await PdfService.pickPdfWithName();
+      if (picked == null || picked.pages.isEmpty) return;
+      await _controller.createNotebookFromPdf(
+        title: picked.title,
+        pdfPages: picked.pages,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(S.of(context).importPdfFailed)),
+      );
+    }
   }
 
   Widget _buildAddNewRow() {

@@ -159,6 +159,9 @@ class S {
   String get addEllipsis => _t('新增...', 'New...');
   String get newNotebook => _t('新增筆記本', 'New Notebook');
   String get newItem => _t('新增項目', 'New Item');
+  String get importPdf => _t('匯入 PDF', 'Import PDF');
+  String get importPdfFailed =>
+      _t('無法匯入這個 PDF', 'Could not import this PDF');
   String get notebookName => _t('筆記本名稱', 'Notebook name');
   String get chooseCoverColor => _t('選擇封面顏色', 'Choose a cover color');
   String get duplicate => _t('製作副本', 'Duplicate');
@@ -212,6 +215,21 @@ class S {
         '確定要刪除第 $n 頁嗎？頁面上的筆跡會一併刪除，無法復原。',
         'Delete page $n? Everything on it will be deleted. This can’t be undone.',
       );
+
+  String get clearCurrentPage => _t('清除當前頁面內容', 'Clear current page');
+  String confirmClearPage(int n) => _t(
+        '確定要清除第 $n 頁的所有筆跡與圖片嗎？只會保留背景或 PDF 內容。(可用復原還原)',
+        'Clear all strokes and images on page $n? Only the background or PDF stays. (You can undo this.)',
+      );
+  String get clear => _t('清除', 'Clear');
+  String get pageCleared => _t('已清除當前頁面', 'Page cleared');
+  String get pageAlreadyEmpty => _t('當前頁面沒有內容', 'Nothing to clear');
+
+  String get palmRejection => _t('防誤觸', 'Palm rejection');
+  String get palmRejectionOn => _t('防誤觸：開 (僅限 Pencil)', 'Palm rejection on (pen only)');
+  String get palmRejectionOff => _t('防誤觸：關', 'Palm rejection off');
+  String get stateOn => _t('開', 'On');
+  String get stateOff => _t('關', 'Off');
 
   // 套索 / 截圖
   String get screenshot => _t('截圖', 'Screenshot');

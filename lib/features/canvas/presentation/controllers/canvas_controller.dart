@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:cft_note/features/pdf_import_export/services/pdf_service.dart';
 import 'package:cft_note/features/shelf/domain/models/notebook.dart';
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:perfect_freehand/perfect_freehand.dart';
@@ -549,6 +550,7 @@ class CanvasController extends ChangeNotifier {
     newPageStyle = prefs.newPageStyle;
     recentBackgrounds.addAll(prefs.recentBackgrounds.take(8));
     eraserScreenRadius = prefs.eraserRadius;
+    palmRejection = prefs.palmRejection;
     if (prefs.favoriteColors != null) {
       favoriteColors
         ..clear()
@@ -799,6 +801,7 @@ class CanvasController extends ChangeNotifier {
       newPageStyle: newPageStyle,
       recentBackgrounds: List.of(recentBackgrounds),
       eraserRadius: eraserScreenRadius,
+      palmRejection: palmRejection,
     );
     CanvasPrefs.initial = prefs; // 下次開筆記 / 切換標籤時直接用最新值
     unawaited(StorageService.saveCanvasPrefs(prefs.toJson()));
@@ -1557,8 +1560,141 @@ class CanvasController extends ChangeNotifier {
     return true;
   }
 
+  // ==========================================
+  // ★ 防誤觸 (Palm rejection)
+  //   開啟後：手指 (touch) 不能畫 / 擦 / 套索 / 操作圖片，
+  //   單指 = 平移畫面、雙指 = 縮放平移 (含雙指輕點復原) 照常；
+  //   筆 (stylus) 與滑鼠照常使用。筆一落下，已按著的手指 (手掌) 立刻忽略。
+  // ==========================================
+  bool palmRejection = false;
+  final Set<int> _touchIds = {}; // 防誤觸模式下，正在畫面上的手指
+  final Set<int> _penIds = {}; // 防誤觸模式下，正在畫面上的筆 / 滑鼠
+  final Set<int> _ignoredPointers = {}; // 被判定為手掌、整段都忽略的手指
+  bool _isTouchPanning = false;
+  Offset _touchPanLast = Offset.zero;
+
+  // 圖片工具：手指按在「不是圖片」的地方 → 單指平移畫布
+  bool _isImagePanning = false;
+  double _imagePanTotal = 0.0; // 累計平移的螢幕距離 (超過點擊容許範圍就不算「點一下取消選取」)
+
+  void _panViewBy(Offset delta) {
+    transformation =
+        Matrix4.translationValues(delta.dx, delta.dy, 0.0) * transformation;
+    _viewMoving = true;
+    if (isContinuous) _syncVisiblePages();
+    viewSignal.fire();
+  }
+
+  void setPalmRejection(bool value) {
+    if (palmRejection == value) return;
+    palmRejection = value;
+    _touchIds.clear();
+    _penIds.clear();
+    _ignoredPointers.clear();
+    _isTouchPanning = false;
+    _cancelActiveGesture();
+    _schedulePrefsSave();
+    _showHudMessage(
+      value ? S.current.palmRejectionOn : S.current.palmRejectionOff,
+      icon: Icons.pan_tool_alt_outlined,
+    );
+  }
+
+  void togglePalmRejection() => setPalmRejection(!palmRejection);
+
+  /// 防誤觸：筆落下時，已經按在畫面上的手指一律當成手掌丟掉
+  void _dropTouchesForPen() {
+    if (_touchIds.isEmpty) return;
+    for (final id in _touchIds) {
+      _pointerPositions.remove(id);
+      _ignoredPointers.add(id);
+    }
+    _touchIds.clear();
+    _isTouchPanning = false;
+    _twoFingerTapCandidate = false;
+    _previousDistance = 0.0;
+    if (_isScalingLocked) {
+      _isScalingLocked = false;
+      _viewMoving = false;
+      refreshDetail();
+      _scheduleRasterRelease();
+    }
+  }
+
+  // ==========================================
+  // ★ 清除當前頁面：所有筆跡與圖片 (背景 / PDF 保留)，一次 Undo 可還原
+  // ==========================================
+  /// 回傳 false = 本來就沒有內容
+  bool clearCurrentPageContent() {
+    final cmds = <CanvasCommand>[];
+
+    if (_historyStrokes.isNotEmpty) {
+      // 由後往前移除並記錄索引，還原時 (反向重放) 就會依原順序放回
+      final removed = <MapEntry<int, Stroke>>[
+        for (int i = _historyStrokes.length - 1; i >= 0; i--)
+          MapEntry(i, _historyStrokes[i]),
+      ];
+      _historyStrokes.clear();
+      cmds.add(EraseStrokesCommand(removed));
+    }
+
+    final list = currentPage.images;
+    for (int i = list.length - 1; i >= 0; i--) {
+      cmds.add(RemoveImageCommand(list, list[i], i));
+    }
+    list.clear();
+
+    if (cmds.isEmpty) {
+      _showHudMessage(S.current.pageAlreadyEmpty, icon: Icons.info_outline);
+      return false;
+    }
+
+    // 進行到一半的筆劃 / 選取一併丟掉
+    _currentPoints.clear();
+    clearSelection();
+
+    _undoStack.add(cmds.length == 1 ? cmds.first : CompositeCommand(cmds));
+    _redoStack.clear();
+    _markDirty();
+    _bakeHistoryToPicture();
+    activeRepaintNotifier.notifyListeners();
+    _showHudMessage(S.current.pageCleared, icon: Icons.cleaning_services_outlined);
+    return true;
+  }
+
   // 1. 手指落下
-  void onPointerDown(int pointerId, Offset position, double pressure) {
+  void onPointerDown(
+    int pointerId,
+    Offset position,
+    double pressure, {
+    PointerDeviceKind kind = PointerDeviceKind.stylus,
+  }) {
+    // 圖片工具：手指也能移動 / 縮放圖片，不套用防誤觸
+    if (palmRejection && currentTool != DrawingTool.image) {
+      if (kind == PointerDeviceKind.touch) {
+        // 筆正在畫面上 → 這根手指是手掌，整段忽略
+        if (_penIds.isNotEmpty) {
+          _ignoredPointers.add(pointerId);
+          return;
+        }
+        _touchIds.add(pointerId);
+        if (_touchIds.length == 1) {
+          // 單指：只平移，不畫也不選取
+          _pointerPositions[pointerId] = position;
+          _gestureCancelled = false;
+          _isTouchPanning = true;
+          _touchPanLast = position;
+          lassoMenu = LassoMenuKind.none;
+          return;
+        }
+        // 第二根手指：停止單指平移，交給下面的雙指縮放流程
+        _isTouchPanning = false;
+      } else {
+        _dropTouchesForPen();
+        _penIds.add(pointerId);
+      }
+    }
+
     _pointerPositions[pointerId] = position;
     if (_pointerPositions.length == 1) _gestureCancelled = false;
 
@@ -1569,6 +1705,7 @@ class CanvasController extends ChangeNotifier {
       _isPotentialNewLasso = false;
       _lassoLongPressTimer?.cancel();
       lassoMenu = LassoMenuKind.none; // 縮放 / 平移時選單位置會失準，直接收起
+      _isImagePanning = false;
       _suspendImageOp();
       eraserPosition = null;
       _lastEraseScenePoint = null;
@@ -1638,6 +1775,14 @@ class CanvasController extends ChangeNotifier {
         }
       } else if (currentTool == DrawingTool.image) {
         _imageDown(scenePoint);
+        // 手指按在空白處 (沒碰到圖片 / 握把) → 單指平移畫布
+        _isImagePanning = kind == PointerDeviceKind.touch &&
+            _imageOp == _ImageOp.none &&
+            _imageCandidate == null;
+        if (_isImagePanning) {
+          _touchPanLast = position;
+          _imagePanTotal = 0.0;
+        }
       }
     }
     notifyListeners();
@@ -1645,6 +1790,20 @@ class CanvasController extends ChangeNotifier {
 
   // 2. 移動中
   void onPointerMove(int pointerId, Offset position, double pressure) {
+    if (_ignoredPointers.contains(pointerId)) return;
+
+    // 防誤觸：單指平移
+    if (_isTouchPanning &&
+        _touchIds.contains(pointerId) &&
+        _pointerPositions.length == 1) {
+      _pointerPositions[pointerId] = position;
+      final delta = position - _touchPanLast;
+      _touchPanLast = position;
+      if (delta == Offset.zero) return;
+      _panViewBy(delta);
+      return;
+    }
+
     _pointerPositions[pointerId] = position;
 
     if (_isScalingLocked && _pointerPositions.length < 2) return;
@@ -1719,6 +1878,15 @@ class CanvasController extends ChangeNotifier {
           _currentLassoDrawing.add(scenePoint);
         }
       } else if (currentTool == DrawingTool.image) {
+        if (_isImagePanning) {
+          final delta = position - _touchPanLast;
+          _touchPanLast = position;
+          _imagePanTotal += delta.distance;
+          // 拖動 = 不是「點空白處取消選取」
+          if (_imagePanTotal >= _tapSlop) _imageDeselectPending = false;
+          if (delta != Offset.zero) _panViewBy(delta);
+          return;
+        }
         _imageMove(scenePoint); // 只重繪畫布，不重建整頁
         return;
       }
@@ -1812,6 +1980,14 @@ class CanvasController extends ChangeNotifier {
 
   // 3. 離地
   void onPointerUp(int pointerId) {
+    if (_ignoredPointers.remove(pointerId)) return;
+    _touchIds.remove(pointerId);
+    _penIds.remove(pointerId);
+    final bool wasTouchPan = _isTouchPanning;
+    final bool wasImagePan = _isImagePanning && _imagePanTotal >= _tapSlop;
+    _isTouchPanning = false;
+    _isImagePanning = false;
+
     // ★★★ 核心觸發：瞬間雙指輕點 (時間 < 250ms 且無位移無捏合) ★★★
     if (_twoFingerTapCandidate && _twoFingerDownTime != null) {
       final elapsed = DateTime.now()
@@ -1839,7 +2015,7 @@ class CanvasController extends ChangeNotifier {
 
     _pointerPositions.remove(pointerId);
 
-    if (!_isScalingLocked && !_gestureCancelled) {
+    if (!_isScalingLocked && !_gestureCancelled && !wasTouchPan) {
       if (currentTool == DrawingTool.image) {
         _imageUp();
       } else if (currentTool == DrawingTool.pen && _currentPoints.isNotEmpty) {
@@ -1909,7 +2085,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     if (_pointerPositions.isEmpty) {
-      final wasScaling = _isScalingLocked;
+      final wasScaling = _isScalingLocked || wasTouchPan || wasImagePan;
       _isScalingLocked = false;
       _viewMoving = false; // 下面的 notifyListeners 會讓筆劃切回向量
       _gestureCancelled = false;

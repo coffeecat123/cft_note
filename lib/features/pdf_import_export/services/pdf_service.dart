@@ -76,6 +76,13 @@ class PdfService {
 
   /// 挑選本機 PDF 並抽取各頁資訊
   static Future<List<PdfPageData>?> pickAndRenderPdf() async {
+    final picked = await pickPdfWithName();
+    return picked?.pages;
+  }
+
+  /// 挑選本機 PDF：回傳「不含副檔名的檔名」與各頁資訊 (書架直接匯入成新筆記本時用)
+  static Future<({String title, List<PdfPageData> pages})?>
+      pickPdfWithName() async {
     final files = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf'],
@@ -84,6 +91,10 @@ class PdfService {
     if (files.isEmpty || files.first.path == null) return null;
 
     final String filePath = files.first.path!;
+    final String title = files.first.name.replaceFirst(
+      RegExp(r'\.pdf$', caseSensitive: false),
+      '',
+    );
     final document = await _getDocument(filePath);
     final List<PdfPageData> pageDataList = [];
 
@@ -111,7 +122,7 @@ class PdfService {
       ));
     }
 
-    return pageDataList;
+    return (title: title, pages: pageDataList);
   }
 
   /// ★★★ 核心提速 30 倍：零拷貝直接產出 ui.Image 直通 GPU，徹底刪除 PNG 編解碼！★★★

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/i18n/app_strings.dart';
 import '../../domain/models/notebook.dart';
+import 'notebook_thumbnail.dart';
 
 class NotebookCard extends StatelessWidget {
   final Notebook notebook;
@@ -30,84 +31,71 @@ class NotebookCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. 書本立體封面
+          // 1. 書本立體封面：顯示第一頁預覽圖 (封面顏色保留在左側書脊)
           Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: notebook.coverColor,
-                borderRadius: const BorderRadius.horizontal(
-                  left: Radius.circular(3),  // 左側書脊較平
-                  right: Radius.circular(10), // 右側書頁圓角
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withAlpha(50),
-                    blurRadius: 8,
-                    offset: const Offset(3, 5),
-                  ),
-                ],
-              ),
-              child: Stack(
-                children: [
-                  // 左側書脊壓痕 (Spine Shadow)
-                  Positioned(
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: 14,
-                    child: Container(
+            child: Center(
+              child: AspectRatio(
+                aspectRatio: NotebookThumbnail.aspectOf(notebook),
+                child: LayoutBuilder(
+                  builder: (context, box) {
+                    const radius = BorderRadius.horizontal(
+                      left: Radius.circular(3), // 左側書脊較平
+                      right: Radius.circular(10), // 右側書頁圓角
+                    );
+                    return Container(
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Colors.black.withAlpha(80),
-                            Colors.white.withAlpha(40),
-                            Colors.black.withAlpha(30),
-                            Colors.transparent,
-                          ],
-                          stops: const [0.0, 0.3, 0.6, 1.0],
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // 封面標籤貼 (紙質白貼標)
-                  Center(
-                    child: Container(
-                      width: 105,
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFBFBF9),
-                        borderRadius: BorderRadius.circular(4),
+                        color: notebook.coverColor,
+                        borderRadius: radius,
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withAlpha(40),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
+                            color: Colors.black.withAlpha(50),
+                            blurRadius: 8,
+                            offset: const Offset(3, 5),
                           ),
                         ],
                       ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            notebook.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF2C3E50),
-                              height: 1.2,
+                      child: ClipRRect(
+                        borderRadius: radius,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            // 第一頁預覽 (左邊留一條封面色書脊)
+                            Positioned(
+                              left: 6,
+                              top: 0,
+                              right: 0,
+                              bottom: 0,
+                              child: NotebookThumbnail(
+                                notebook: notebook,
+                                logicalWidth: box.maxWidth,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 6),
-                          Container(width: 24, height: 1.5, color: Colors.grey[300]),
-                        ],
+                            // 左側書脊壓痕 (Spine Shadow)
+                            Positioned(
+                              left: 0,
+                              top: 0,
+                              bottom: 0,
+                              width: 14,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      Colors.black.withAlpha(80),
+                                      Colors.white.withAlpha(40),
+                                      Colors.black.withAlpha(30),
+                                      Colors.transparent,
+                                    ],
+                                    stops: const [0.0, 0.3, 0.6, 1.0],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ),
-                ],
+                    );
+                  },
+                ),
               ),
             ),
           ),
