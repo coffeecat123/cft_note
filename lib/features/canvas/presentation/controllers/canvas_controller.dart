@@ -8,6 +8,7 @@ import 'package:cft_note/features/pdf_import_export/services/pdf_service.dart';
 import 'package:cft_note/features/shelf/domain/models/notebook.dart';
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:perfect_freehand/perfect_freehand.dart';
 
@@ -452,7 +453,13 @@ class CanvasController extends ChangeNotifier {
   ];
 
   // 變換與手勢狀態
-  Matrix4 transformation = Matrix4.identity();
+  Matrix4 _transformation = Matrix4.identity();
+  Matrix4 get transformation => _transformation;
+  set transformation(Matrix4 value) {
+    // 慣性滑動中，只要別處 (換頁、縮放、還原...) 改了矩陣就中止滑動
+    if (_flinging && !_flingStepping) _stopFling();
+    _transformation = value;
+  }
   final Map<int, Offset> _pointerPositions = {};
   double _previousDistance = 0.0;
   Offset _previousMidpoint = Offset.zero;
@@ -753,6 +760,7 @@ class CanvasController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _flinging = false;
     flushPrefs();
     images.dispose();
     _saveCurrentPageState(); // ★ 核心修復：退出畫布時，立即把筆跡存回當前頁面！
@@ -1605,6 +1613,128 @@ class CanvasController extends ChangeNotifier {
     viewSignal.fire();
   }
 
+  // ==========================================
+  // 平移：軸向鎖定 + 放手後的慣性滑動
+  // ==========================================
+  static const double _axisLockEnterDeg = 15.0; // 與水平 / 鉛直夾角小於此值 → 鎖單軸
+  static const double _axisLockExitDeg = 28.0; // 夾角超過此值 → 解除鎖定 (遲滯，避免抖動)
+  static const double _flingTau = 0.38; // 速度衰減時間常數 (秒)；越大滑越遠
+  static const double _flingMinStart = 150.0; // 放手速度低於此值 (px/s) 不滑
+  static const double _flingMinSpeed = 25.0; // 滑動中速度低於此值就停
+  static const double _flingMaxSpeed = 7000.0;
+
+  final Stopwatch _panClock = Stopwatch()..start();
+  final List<_PanSample> _panSamples = [];
+  Offset _panDir = Offset.zero; // 衰減累計的原始移動方向
+  int _panAxis = 0; // 0 = 自由, 1 = 只動 x, 2 = 只動 y
+  bool _pinchZoomed = false; // 雙指手勢中真的有縮放 (縮放過就不慣性滑動)
+  Offset? _pendingPinchFling; // 雙指其中一指離開時就算好的平移速度
+  int _pendingPinchFlingAt = 0;
+
+  bool _flinging = false;
+  bool _flingStepping = false;
+  Offset _flingVelocity = Offset.zero;
+  Duration? _flingLastStamp;
+
+  void _resetPanTracking() {
+    _panSamples.clear();
+    _panDir = Offset.zero;
+    _panAxis = 0;
+  }
+
+  /// 接近水平 / 鉛直的拖動只保留主軸分量；回傳實際要套用的位移
+  Offset _applyAxisLock(Offset raw) {
+    if (raw == Offset.zero) return raw;
+    _panDir = _panDir * 0.85 + raw;
+    if (_panDir.distance < 4.0) return raw; // 方向還不明確
+    final ax = _panDir.dx.abs(), ay = _panDir.dy.abs();
+    final deg = atan2(min(ax, ay), max(ax, ay)) * 180 / pi; // 離最近軸的夾角
+    final dominant = ax >= ay ? 1 : 2;
+    if (_panAxis == 0) {
+      if (deg <= _axisLockEnterDeg) _panAxis = dominant;
+    } else if (deg > _axisLockExitDeg || _panAxis != dominant) {
+      _panAxis = deg <= _axisLockEnterDeg ? dominant : 0;
+    }
+    switch (_panAxis) {
+      case 1:
+        return Offset(raw.dx, 0);
+      case 2:
+        return Offset(0, raw.dy);
+      default:
+        return raw;
+    }
+  }
+
+  void _recordPanSample(Offset applied) {
+    final now = _panClock.elapsedMilliseconds;
+    _panSamples.add(_PanSample(now, applied));
+    while (_panSamples.isNotEmpty && now - _panSamples.first.t > 150) {
+      _panSamples.removeAt(0);
+    }
+  }
+
+  /// 以最近 ~100ms 的移動算放手速度 (px/s)；停頓過 / 太慢 → null
+  Offset? _panReleaseVelocity() {
+    final now = _panClock.elapsedMilliseconds;
+    final recent = _panSamples.where((s) => now - s.t <= 100).toList();
+    if (recent.length < 2) return null;
+    if (now - recent.last.t > 60) return null; // 手指停住後才放開
+    final span = recent.last.t - recent.first.t;
+    if (span < 8) return null;
+    var sum = Offset.zero;
+    for (int i = 1; i < recent.length; i++) {
+      sum += recent[i].delta;
+    }
+    var v = sum * (1000.0 / span);
+    final speed = v.distance;
+    if (speed < _flingMinStart) return null;
+    if (speed > _flingMaxSpeed) v = v * (_flingMaxSpeed / speed);
+    return v;
+  }
+
+  void _startFling(Offset velocity) {
+    _flinging = true;
+    _flingVelocity = velocity;
+    _flingLastStamp = null;
+    _viewMoving = true; // 滑動期間維持「互動中」(筆劃用點陣快取)
+    SchedulerBinding.instance.scheduleFrameCallback(_onFlingFrame);
+  }
+
+  void _onFlingFrame(Duration stamp) {
+    if (!_flinging || _disposed) return;
+    final last = _flingLastStamp;
+    _flingLastStamp = stamp;
+    if (last != null) {
+      final dt = ((stamp - last).inMicroseconds / 1e6).clamp(0.0, 0.05);
+      final decay = exp(-dt / _flingTau);
+      final delta = _flingVelocity * (_flingTau * (1 - decay));
+      _flingVelocity = _flingVelocity * decay;
+      _flingStepping = true;
+      _panViewBy(delta);
+      _flingStepping = false;
+      if (_flingVelocity.distance < _flingMinSpeed) {
+        _stopFling(refresh: true);
+        return;
+      }
+    }
+    SchedulerBinding.instance.scheduleFrameCallback(_onFlingFrame);
+  }
+
+  /// 停止慣性滑動。refresh = true：補上高清渲染並讓筆劃切回向量
+  void _stopFling({bool refresh = false}) {
+    if (!_flinging) return;
+    _flinging = false;
+    _flingVelocity = Offset.zero;
+    _flingLastStamp = null;
+    _viewMoving = false;
+    _scheduleRasterRelease();
+    if (refresh && !_disposed) {
+      refreshDetail();
+      viewSignal.fire();
+      notifyListeners();
+    }
+  }
+
   void setPalmRejection(bool value) {
     if (palmRejection == value) return;
     palmRejection = value;
@@ -1699,6 +1829,12 @@ class CanvasController extends ChangeNotifier {
     double pressure, {
     PointerDeviceKind kind = PointerDeviceKind.stylus,
   }) {
+    if (_flinging) {
+      _stopFling();
+      refreshDetail();
+      viewSignal.fire();
+    }
+    _resetPanTracking();
     // 圖片工具：手指也能移動 / 縮放圖片，不套用防誤觸
     if (palmRejection && currentTool != DrawingTool.image) {
       if (kind == PointerDeviceKind.touch) {
@@ -1762,8 +1898,11 @@ class CanvasController extends ChangeNotifier {
         _finger2Initial = pts[1];
         _initialTwoFingerDistance = (pts[0] - pts[1]).distance;
         _matrixBeforeGesture = transformation.clone();
+        _pinchZoomed = false;
+        _pendingPinchFling = null;
       } else {
         _twoFingerTapCandidate = false;
+        _pinchZoomed = true; // 三指以上不做慣性
       }
 
       // 雙指誤擦復原保持不變...
@@ -1846,10 +1985,12 @@ class CanvasController extends ChangeNotifier {
         _touchIds.contains(pointerId) &&
         _pointerPositions.length == 1) {
       _pointerPositions[pointerId] = position;
-      final delta = position - _touchPanLast;
+      final raw = position - _touchPanLast;
       _touchPanLast = position;
-      if (delta == Offset.zero) return;
-      _panViewBy(delta);
+      if (raw == Offset.zero) return;
+      final delta = _applyAxisLock(raw);
+      _recordPanSample(delta);
+      if (delta != Offset.zero) _panViewBy(delta);
       return;
     }
 
@@ -1923,9 +2064,13 @@ class CanvasController extends ChangeNotifier {
             _lassoLongPressTimer?.cancel();
             _isPotentialNewLasso = false; // 拖動了 → 不是「點一下取消選取」
           }
-          final delta = position - _touchPanLast;
+          final raw = position - _touchPanLast;
           _touchPanLast = position;
-          if (delta != Offset.zero) _panViewBy(delta);
+          if (raw != Offset.zero) {
+            final delta = _applyAxisLock(raw);
+            _recordPanSample(delta);
+            if (delta != Offset.zero) _panViewBy(delta);
+          }
           return;
         } else if (_isPotentialNewLasso) {
           // 手指在容許範圍內微動仍算「按住」，才能觸發長按貼上
@@ -1940,12 +2085,16 @@ class CanvasController extends ChangeNotifier {
         }
       } else if (currentTool == DrawingTool.image) {
         if (_isImagePanning) {
-          final delta = position - _touchPanLast;
+          final raw = position - _touchPanLast;
           _touchPanLast = position;
-          _imagePanTotal += delta.distance;
+          _imagePanTotal += raw.distance;
           // 拖動 = 不是「點空白處取消選取」
           if (_imagePanTotal >= _tapSlop) _imageDeselectPending = false;
-          if (delta != Offset.zero) _panViewBy(delta);
+          if (raw != Offset.zero) {
+            final delta = _applyAxisLock(raw);
+            _recordPanSample(delta);
+            if (delta != Offset.zero) _panViewBy(delta);
+          }
           return;
         }
         _imageMove(scenePoint); // 只重繪畫布，不重建整頁
@@ -1982,7 +2131,21 @@ class CanvasController extends ChangeNotifier {
       }
       if (_previousDistance > 0 && currentDistance > 0) {
         final double rawScaleFactor = currentDistance / _previousDistance;
-        final Offset deltaTranslation = currentMidpoint - _previousMidpoint;
+        final Offset rawTranslation = currentMidpoint - _previousMidpoint;
+
+        // 兩指間距明顯變化 → 這次是縮放手勢 (之後不鎖軸、放手也不慣性滑動)
+        if (!_pinchZoomed &&
+            (currentDistance - _initialTwoFingerDistance).abs() >
+                max(10.0, _initialTwoFingerDistance * 0.06)) {
+          _pinchZoomed = true;
+          _panSamples.clear();
+        }
+        // 純平移：接近水平 / 鉛直就只動單軸，並記錄速度供放手後慣性滑動
+        Offset deltaTranslation = rawTranslation;
+        if (!_pinchZoomed) {
+          deltaTranslation = _applyAxisLock(rawTranslation);
+          _recordPanSample(deltaTranslation);
+        }
 
         // 1. 計算目前的實際 2D 縮放倍率
         final double currentScale = sqrt(
@@ -2047,6 +2210,16 @@ class CanvasController extends ChangeNotifier {
     final bool wasTouchPan = _isTouchPanning;
     final bool wasImagePan = _isImagePanning && _imagePanTotal >= _tapSlop;
     final bool wasLassoPan = _isLassoPanning && _lassoPanMoved;
+    // 放手瞬間的平移速度 (單指平移；雙指則在第一指離開時就先算好)
+    Offset? flingV;
+    if (wasTouchPan || wasImagePan || wasLassoPan) {
+      flingV = _panReleaseVelocity();
+    } else if (_isScalingLocked && !_pinchZoomed) {
+      if (_pointerPositions.length == 2) {
+        _pendingPinchFling = _panReleaseVelocity();
+        _pendingPinchFlingAt = _panClock.elapsedMilliseconds;
+      }
+    }
     _isTouchPanning = false;
     _isImagePanning = false;
     _isLassoPanning = false;
@@ -2141,15 +2314,26 @@ class CanvasController extends ChangeNotifier {
     if (_pointerPositions.isEmpty) {
       final wasScaling =
           _isScalingLocked || wasTouchPan || wasImagePan || wasLassoPan;
+      if (_isScalingLocked &&
+          !_pinchZoomed &&
+          _panClock.elapsedMilliseconds - _pendingPinchFlingAt < 150) {
+        flingV ??= _pendingPinchFling; // 第二指也很快離開才算一次滑動
+      }
+      _pendingPinchFling = null;
       _isScalingLocked = false;
-      _viewMoving = false; // 下面的 notifyListeners 會讓筆劃切回向量
       _gestureCancelled = false;
       _previousDistance = 0.0;
 
-      // ★ 雙指縮放放開時，自動向 pdfrx 索取高清渲染
-      if (wasScaling) {
-        refreshDetail();
-        _scheduleRasterRelease();
+      if (wasScaling && flingV != null) {
+        // 放手後順勢滑出去；滑完才補高清渲染 / 切回向量
+        _startFling(flingV);
+      } else {
+        _viewMoving = false; // 下面的 notifyListeners 會讓筆劃切回向量
+        // ★ 雙指縮放放開時，自動向 pdfrx 索取高清渲染
+        if (wasScaling) {
+          refreshDetail();
+          _scheduleRasterRelease();
+        }
       }
       // ★ 手指全部離開後，倍率膠囊過一會兒自動消失 (文字訊息自己有計時器)
       if (showZoomIndicator && hudMessage == null) {
@@ -2580,4 +2764,11 @@ class CanvasController extends ChangeNotifier {
     _syncVisiblePages();
     images.refreshDetail();
   }
+}
+
+/// 平移速度取樣：時間 (ms) 與當次實際套用的位移
+class _PanSample {
+  final int t;
+  final Offset delta;
+  const _PanSample(this.t, this.delta);
 }
