@@ -99,16 +99,24 @@ class RegionCapture {
         canvas.save();
         canvas.clipRect(pageRect);
         for (final img in page.images) {
-          if (!img.rect.overlaps(region)) continue;
+          if (!img.bounds.overlaps(region)) continue;
           await PageImageStore.ensureLoaded(img);
           final bmp = img.image;
           if (bmp == null) continue;
+          canvas.save();
+          if (img.rotation != 0) {
+            final c = img.rect.center;
+            canvas.translate(c.dx, c.dy);
+            canvas.rotate(img.rotation);
+            canvas.translate(-c.dx, -c.dy);
+          }
           canvas.drawImageRect(
             bmp,
             ui.Rect.fromLTWH(0, 0, bmp.width.toDouble(), bmp.height.toDouble()),
             img.rect,
             imagePaint,
           );
+          canvas.restore();
         }
         canvas.restore();
       }

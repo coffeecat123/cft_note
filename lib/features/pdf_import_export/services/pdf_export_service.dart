@@ -90,7 +90,26 @@ class PdfExportService {
         for (final img in page.images) {
           final file = await PageImageStore.fileFor(img);
           if (!await file.exists()) continue;
-          graphics.drawImage(PdfBitmap(await file.readAsBytes()), img.rect);
+          final bitmap = PdfBitmap(await file.readAsBytes());
+          if (img.rotation == 0) {
+            graphics.drawImage(bitmap, img.rect);
+          } else {
+            // 以圖片中心為原點旋轉 (弧度 → 角度；兩邊都是順時針為正)
+            final c = img.rect.center;
+            graphics.save();
+            graphics.translateTransform(c.dx, c.dy);
+            graphics.rotateTransform(img.rotation * 180 / math.pi);
+            graphics.drawImage(
+              bitmap,
+              Rect.fromLTWH(
+                -img.rect.width / 2,
+                -img.rect.height / 2,
+                img.rect.width,
+                img.rect.height,
+              ),
+            );
+            graphics.restore();
+          }
         }
 
         // ============================================================

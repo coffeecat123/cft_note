@@ -640,6 +640,8 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                     canPasteStrokes: _controller.lassoMenuCanPasteStrokes,
                     canPasteImage: _controller.lassoMenuCanPasteImage,
                     onScreenshot: _screenshotSelection,
+                    onResize: _controller.beginSelectionTransform,
+                    inTransformMode: _controller.selectionTransformMode,
                   ),
                 ),
 

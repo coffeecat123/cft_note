@@ -15,6 +15,8 @@ class LassoContextMenu extends StatelessWidget {
   final VoidCallback onCopy;
   final VoidCallback onDelete;
   final VoidCallback onScreenshot;
+  final VoidCallback onResize;
+  final bool inTransformMode; // 已經在調整大小模式 → 不再顯示「調整大小」
   final VoidCallback onPaste;
   final VoidCallback onPasteImage;
   final bool canPasteStrokes; // 套索剪貼簿有筆劃
@@ -28,6 +30,8 @@ class LassoContextMenu extends StatelessWidget {
     required this.onCopy,
     required this.onDelete,
     required this.onScreenshot,
+    required this.onResize,
+    this.inTransformMode = false,
     required this.onPaste,
     required this.onPasteImage,
     this.canPasteStrokes = true,
@@ -42,6 +46,7 @@ class LassoContextMenu extends StatelessWidget {
         _item(Icons.content_cut, s.cut, onCut),
         _item(Icons.content_copy, s.copy, onCopy),
         _item(Icons.delete_outline, s.delete, onDelete, color: Colors.redAccent),
+        if (!inTransformMode) _item(Icons.open_in_full, s.resize, onResize),
         _item(Icons.crop_free, s.screenshot, onScreenshot),
       ],
       LassoMenuKind.region => [_item(Icons.crop_free, s.screenshot, onScreenshot)],

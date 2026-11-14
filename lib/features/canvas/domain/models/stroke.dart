@@ -39,7 +39,7 @@ Path smoothOutlinePath(List<Offset> pts) {
 class Stroke {
   final List<PointVector> points;
   final Color color;
-  final BrushSettings settings;
+  BrushSettings settings; // 套索調整大小時會跟著縮放粗細 (改完要呼叫 invalidate)
 
   Stroke({
     required this.points,

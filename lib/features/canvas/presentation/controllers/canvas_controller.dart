@@ -13,6 +13,7 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:perfect_freehand/perfect_freehand.dart';
 
 import '../../../../core/algorithms/ray_casting.dart';
+import '../../../../core/algorithms/rot_frame.dart';
 import '../../../../core/i18n/app_strings.dart';
 import '../../../../core/engine/repaint_signal.dart';
 import '../../domain/models/brush_settings.dart';
@@ -31,7 +32,7 @@ import 'page_image_manager.dart';
 import 'region_capture.dart';
 
 /// 圖片模式下，一次手指按下後正在做的操作
-enum _ImageOp { none, move, resize, delete }
+enum _ImageOp { none, move, resize, rotate, delete }
 
 // 2. 主畫布控制器 (CanvasController)
 /// 縮放 / 平移時用來取代向量筆劃的點陣快取。
@@ -1103,11 +1104,11 @@ class CanvasController extends ChangeNotifier {
     // 圖片模式：搬移 / 縮放做到一半就還原成按下前的位置
     final img = _selectedImage;
     final start = _imageStartRect;
-    if (img != null &&
-        start != null &&
-        (_imageOp == _ImageOp.move || _imageOp == _ImageOp.resize)) {
+    if (img != null && start != null && _imageOpIsEdit) {
       img.rect = start;
+      img.rotation = _imageStartRot;
     }
+    _xfRevert();
     _imageOp = _ImageOp.none;
     _imageStartRect = null;
     _imageDragStarted = false;
@@ -1148,6 +1149,7 @@ class CanvasController extends ChangeNotifier {
     _imageStartRect = null;
     _imageCandidate = null;
     _imageDeselectPending = false;
+    _endSelectionTransformState();
   }
 
   // 1. 開始調色：手指按下滑桿瞬間呼叫 (記錄初始快照)
@@ -1291,20 +1293,22 @@ class CanvasController extends ChangeNotifier {
 
   // ==========================================
   // ★ 圖片模式
-  //   點圖片 → 選取 (長方形外框)；框內拖曳 = 平移；右下角 = 等比縮放；右上角 = 刪除。
+  //   點圖片 → 選取 (外框 + 握把)；框內拖曳 = 平移；
+  //   右下角 = 以圖片中心為基準等比縮放；上方圓形握把 = 繞中心旋轉；右上角 = 刪除。
   //   所有座標都是「目前編輯頁」的頁面座標；握把大小以螢幕像素為準 (隨縮放換算)。
   // ==========================================
   static const double imageHandleHitScreen = 24.0; // 握把可點擊半徑 (螢幕 px)
   static const double imageHandleDrawScreen = 12.0; // 握把繪製半徑 (螢幕 px)
+  static const double imageRotateHandleScreen = 36.0; // 旋轉握把離上邊的距離 (螢幕 px)
   static const double _imageMinSide = 10.0; // 圖片短邊最小值 (頁面單位)
   static const double _imageKeepVisible = 5.0; // 拖動時至少要留在紙張內的長寬 (頁面單位)
 
   PageImage? _selectedImage;
   _ImageOp _imageOp = _ImageOp.none;
   Rect? _imageStartRect;
+  double _imageStartRot = 0.0;
   Offset _imageDownScene = Offset.zero;
   Offset _imageLastScene = Offset.zero;
-  Offset _imageGrab = Offset.zero; // 縮放時手指離右下角的偏移 (避免一按下就跳動)
   bool _imageDragStarted = false;
   // 按在「尚未選取」的圖片上：等手指放開 / 拖動才真正選取 (雙指縮放時不會換掉選取)
   PageImage? _imageCandidate;
@@ -1312,6 +1316,11 @@ class CanvasController extends ChangeNotifier {
   bool _imageDeselectPending = false;
 
   bool get isImageMode => currentTool == DrawingTool.image;
+
+  bool get _imageOpIsEdit =>
+      _imageOp == _ImageOp.move ||
+      _imageOp == _ImageOp.resize ||
+      _imageOp == _ImageOp.rotate;
 
   /// 目前選取的圖片 (已不在頁面上則視為沒有)
   PageImage? get selectedImage {
@@ -1321,39 +1330,50 @@ class CanvasController extends ChangeNotifier {
 
   double get _imageHitRadius => imageHandleHitScreen / (zoomPercentage / 100);
 
-  _ImageOp _imageOpAt(PageImage img, Offset p) {
+  /// 旋轉握把離外框上邊的距離 (頁面單位)；繪製與點擊共用
+  double get rotateHandleOffsetScene =>
+      imageRotateHandleScreen / (zoomPercentage / 100);
+
+  /// 外框 (圖片或套索選取框) 上，這一點按到了什麼：握把優先，其次框內 = 平移
+  _ImageOp _frameOpAt(RotFrame f, Offset p) {
     final hr = _imageHitRadius;
-    final r = img.rect;
-    if ((p - r.topRight).distance <= hr) return _ImageOp.delete;
-    if ((p - r.bottomRight).distance <= hr) return _ImageOp.resize;
-    if (r.contains(p)) return _ImageOp.move;
+    if ((p - f.deleteHandle).distance <= hr) return _ImageOp.delete;
+    if ((p - f.scaleHandle).distance <= hr) return _ImageOp.resize;
+    if ((p - f.rotateHandle(rotateHandleOffsetScene)).distance <= hr) {
+      return _ImageOp.rotate;
+    }
+    if (f.contains(p)) return _ImageOp.move;
     return _ImageOp.none;
   }
 
-  /// 螢幕上的這一點是否落在「已選取圖片」的框或握把上
+  /// 螢幕上的這一點是否落在「已選取圖片 / 套索調整框」的框或握把上
   bool _pointerHitsSelectedImage(Offset screenPoint) {
+    if (currentTool == DrawingTool.lasso && selectionTransformMode) {
+      return _frameOpAt(selectionFrame, toScene(screenPoint)) != _ImageOp.none;
+    }
     if (!isImageMode) return false;
     final sel = selectedImage;
     if (sel == null) return false;
-    return _imageOpAt(sel, toScene(screenPoint)) != _ImageOp.none;
+    return _frameOpAt(sel.frame, toScene(screenPoint)) != _ImageOp.none;
   }
 
-  /// 圖片可以拖出紙張邊緣，只要求至少還有一小塊 ([_imageKeepVisible]) 留在紙張內，
+  /// 圖片可以拖出紙張邊緣，只要求 (旋轉後的外框) 至少還有一小塊 ([_imageKeepVisible]) 留在紙張內，
   /// 這樣一定抓得回來。
-  Rect _clampImageRect(Rect r) {
+  Rect _clampImageRect(Rect r, double rot) {
+    final b = RotFrame(r, rot).bounds;
     final pw = currentPage.width, ph = currentPage.height;
-    final keepX = min(_imageKeepVisible, r.width);
-    final keepY = min(_imageKeepVisible, r.height);
+    final keepX = min(_imageKeepVisible, b.width);
+    final keepY = min(_imageKeepVisible, b.height);
     double dx = 0, dy = 0;
-    if (r.right < keepX) {
-      dx = keepX - r.right;
-    } else if (r.left > pw - keepX) {
-      dx = pw - keepX - r.left;
+    if (b.right < keepX) {
+      dx = keepX - b.right;
+    } else if (b.left > pw - keepX) {
+      dx = pw - keepX - b.left;
     }
-    if (r.bottom < keepY) {
-      dy = keepY - r.bottom;
-    } else if (r.top > ph - keepY) {
-      dy = ph - keepY - r.top;
+    if (b.bottom < keepY) {
+      dy = keepY - b.bottom;
+    } else if (b.top > ph - keepY) {
+      dy = ph - keepY - b.top;
     }
     return r.shift(Offset(dx, dy));
   }
@@ -1372,13 +1392,13 @@ class CanvasController extends ChangeNotifier {
     // 已選取的圖片優先 (它的握把可能超出圖片範圍)：立刻開始操作
     final sel = selectedImage;
     if (sel != null) {
-      op = _imageOpAt(sel, p);
+      op = _frameOpAt(sel.frame, p);
       if (op != _ImageOp.none) target = sel;
     }
     if (target != null) {
       _imageOp = op;
       _imageStartRect = target.rect;
-      _imageGrab = p - target.rect.bottomRight;
+      _imageStartRot = target.rotation;
       viewSignal.fire();
       return;
     }
@@ -1386,10 +1406,11 @@ class CanvasController extends ChangeNotifier {
     // 否則找最上面那張被點到的圖片 → 先當候選；放開 / 拖動才真正選取
     final list = currentPage.images;
     for (int i = list.length - 1; i >= 0; i--) {
-      if (list[i].rect.contains(p)) {
+      if (list[i].frame.contains(p)) {
         _imageCandidate = list[i];
         _imageOp = _ImageOp.move;
         _imageStartRect = list[i].rect;
+        _imageStartRot = list[i].rotation;
         return;
       }
     }
@@ -1421,21 +1442,29 @@ class CanvasController extends ChangeNotifier {
       case _ImageOp.move:
         // 點一下選取時手指會微動，超過容許範圍才算拖曳
         if (!_imageDragStarted) {
-          final moved = (p - _imageDownScene).distance * (zoomPercentage / 100);
-          if (moved < _tapSlop) return;
+          if (movedPx < _tapSlop) return;
           _imageDragStarted = true;
         }
-        img.rect = _clampImageRect(start.shift(p - _imageDownScene));
+        img.rect = _clampImageRect(start.shift(p - _imageDownScene), _imageStartRot);
         break;
       case _ImageOp.resize:
-        // 左上角固定、等比縮放：寬度取「水平 / 垂直方向要求」較大者
+        // 以圖片中心為基準等比縮放：新大小 = 手指離中心的距離 / 按下時離中心的距離
+        final c = start.center;
+        final d0 = (_imageDownScene - c).distance;
+        if (d0 < 1e-6) return;
         final aspect = start.width / start.height;
-        final target = p - _imageGrab;
-        double w = max(target.dx - start.left, (target.dy - start.top) * aspect);
         final minW = aspect >= 1 ? _imageMinSide * aspect : _imageMinSide;
         final maxW = max(currentPage.width, currentPage.height) * 4;
-        w = w.clamp(minW, max(minW, maxW)).toDouble();
-        img.rect = Rect.fromLTWH(start.left, start.top, w, w / aspect);
+        final w = (start.width * (p - c).distance / d0)
+            .clamp(minW, max(minW, maxW))
+            .toDouble();
+        img.rect = Rect.fromCenter(center: c, width: w, height: w / aspect);
+        break;
+      case _ImageOp.rotate:
+        final c = start.center;
+        final a0 = atan2(_imageDownScene.dy - c.dy, _imageDownScene.dx - c.dx);
+        final a1 = atan2(p.dy - c.dy, p.dx - c.dx);
+        img.rotation = RotFrame.snap(_imageStartRot + (a1 - a0)); // 接近 45° 倍數會吸附
         break;
       case _ImageOp.delete:
       case _ImageOp.none:
@@ -1472,38 +1501,43 @@ class CanvasController extends ChangeNotifier {
 
     if (op == _ImageOp.delete) {
       // 手指放開時還在刪除握把上才算「按下刪除」
-      if ((_imageLastScene - img.rect.topRight).distance <= _imageHitRadius) {
+      if ((_imageLastScene - img.frame.deleteHandle).distance <= _imageHitRadius) {
         _deleteImage(img);
       }
       return;
     }
-    if (img.rect != start) {
-      _undoStack.add(TransformImageCommand(img, start, img.rect));
-      _redoStack.clear();
-      _markDirty();
-    }
+    _pushImageTransform(img, start, _imageStartRot);
+  }
+
+  void _pushImageTransform(PageImage img, Rect startRect, double startRot) {
+    if (img.rect == startRect && img.rotation == startRot) return;
+    _undoStack.add(
+      TransformImageCommand(
+        img,
+        startRect,
+        img.rect,
+        fromRotation: startRot,
+        toRotation: img.rotation,
+      ),
+    );
+    _redoStack.clear();
+    _markDirty();
   }
 
   /// 第二根手指落下 (雙指縮放 / 平移畫面)：不打斷圖片編輯。
-  /// 已經做出的平移 / 縮放就地確定 (可復原)，選取狀態原封不動，縮放完還能繼續編輯。
+  /// 已經做出的平移 / 縮放 / 旋轉就地確定 (可復原)，選取狀態原封不動，縮放完還能繼續編輯。
   void _suspendImageOp() {
     final img = _selectedImage;
     final start = _imageStartRect;
-    final op = _imageOp;
-    if (_imageCandidate == null &&
-        img != null &&
-        start != null &&
-        (op == _ImageOp.move || op == _ImageOp.resize) &&
-        img.rect != start) {
-      _undoStack.add(TransformImageCommand(img, start, img.rect));
-      _redoStack.clear();
-      _markDirty();
+    if (_imageCandidate == null && img != null && start != null && _imageOpIsEdit) {
+      _pushImageTransform(img, start, _imageStartRot);
     }
     _imageOp = _ImageOp.none;
     _imageStartRect = null;
     _imageDragStarted = false;
     _imageCandidate = null;
     _imageDeselectPending = false;
+    _xfSuspend(); // 套索調整大小做到一半也一併確定
   }
 
   void _deleteImage(PageImage img) {
@@ -1516,6 +1550,239 @@ class CanvasController extends ChangeNotifier {
     _selectedImage = null;
     _markDirty();
     _showHudMessage(S.current.imageDeleted, icon: Icons.delete_outline);
+  }
+
+  // ==========================================
+  // ★ 套索「調整大小」 (貼上之後也自動進入)
+  //   選單按下「調整大小」→ 選取範圍出現與圖片編輯相同的外框 + 握把：
+  //   框內拖曳 = 平移；右下角 = 以中心等比縮放；上方握把 = 繞中心旋轉；右上角 = 刪除。
+  //   筆劃的點與粗細、圖片的位置 / 大小 / 角度都一起變換，整個動作一次 Undo。
+  // ==========================================
+  bool selectionTransformMode = false;
+  Rect _xfBox = Rect.zero; // 外框 (未旋轉座標)，旋轉繞其中心
+  double _xfRot = 0.0;
+  _ImageOp _xfOp = _ImageOp.none;
+  bool _xfMoved = false;
+  Offset _xfDownScene = Offset.zero;
+  Offset _xfDownScreen = Offset.zero;
+  Offset _xfLastScene = Offset.zero;
+  Rect _xfStartBox = Rect.zero;
+  double _xfStartRot = 0.0;
+  List<StrokeXformState> _xfStrokesStart = const [];
+  List<ImageXformState> _xfImagesStart = const [];
+  List<Offset> _xfPolyStart = const [];
+
+  RotFrame get selectionFrame => RotFrame(_xfBox, _xfRot);
+
+  /// 選單「調整大小」
+  void beginSelectionTransform() {
+    if (!_hasSelectedContent) return;
+    lassoMenu = LassoMenuKind.none;
+
+    if (_selectedStrokes.isEmpty && _selectedImages.length == 1) {
+      // 只有一張圖：直接用圖片自己的 (含旋轉的) 外框，和圖片編輯完全一樣
+      final im = _selectedImages.first;
+      _xfBox = im.rect;
+      _xfRot = im.rotation;
+    } else {
+      Rect? b;
+      for (final st in _selectedStrokes) {
+        final r = st.bounds.inflate(st.settings.size * 0.5);
+        b = b == null ? r : b.expandToInclude(r);
+      }
+      for (final im in _selectedImages) {
+        b = b == null ? im.bounds : b.expandToInclude(im.bounds);
+      }
+      if (b == null) return;
+      b = b.inflate(4);
+      _xfBox = Rect.fromCenter(
+        center: b.center,
+        width: max(b.width, 20.0),
+        height: max(b.height, 20.0),
+      );
+      _xfRot = 0.0;
+    }
+    selectionTransformMode = true;
+    _xfOp = _ImageOp.none;
+    viewSignal.fire();
+    notifyListeners();
+  }
+
+  void _endSelectionTransformState() {
+    selectionTransformMode = false;
+    _xfOp = _ImageOp.none;
+    _xfMoved = false;
+  }
+
+  void _xfSnapshot() {
+    _xfStartBox = _xfBox;
+    _xfStartRot = _xfRot;
+    _xfStrokesStart = [
+      for (final st in _selectedStrokes)
+        StrokeXformState(st, List.of(st.points), st.settings.size),
+    ];
+    _xfImagesStart = [
+      for (final im in _selectedImages) ImageXformState(im, im.rect, im.rotation),
+    ];
+    _xfPolyStart = List.of(_selectedLassoPolygon);
+  }
+
+  /// 按下：落在外框 / 握把上就開始操作，回傳 true
+  bool _xfDown(Offset scenePoint, Offset screenPoint) {
+    final op = _frameOpAt(selectionFrame, scenePoint);
+    if (op == _ImageOp.none) return false;
+    _xfOp = op;
+    _xfMoved = false;
+    _xfDownScene = scenePoint;
+    _xfLastScene = scenePoint;
+    _xfDownScreen = screenPoint;
+    _xfSnapshot();
+    viewSignal.fire();
+    return true;
+  }
+
+  void _xfMove(Offset scenePoint, Offset screenPoint) {
+    _xfLastScene = scenePoint;
+    if (_xfOp == _ImageOp.delete || _xfOp == _ImageOp.none) return;
+    if (!_xfMoved) {
+      if ((screenPoint - _xfDownScreen).distance < _tapSlop) return;
+      _xfMoved = true;
+    }
+    final c0 = _xfStartBox.center;
+    Offset t = Offset.zero;
+    double s = 1.0, dr = 0.0;
+    switch (_xfOp) {
+      case _ImageOp.move:
+        t = scenePoint - _xfDownScene;
+        break;
+      case _ImageOp.resize:
+        final d0 = (_xfDownScene - c0).distance;
+        if (d0 < 1e-6) return;
+        final minSide = min(_xfStartBox.width, _xfStartBox.height);
+        final maxSide = max(_xfStartBox.width, _xfStartBox.height);
+        final sMin = min(1.0, _imageMinSide / minSide);
+        final sMax = max(
+          1.0,
+          max(currentPage.width, currentPage.height) * 4 / maxSide,
+        );
+        s = ((scenePoint - c0).distance / d0).clamp(sMin, sMax).toDouble();
+        break;
+      case _ImageOp.rotate:
+        final a0 = atan2(_xfDownScene.dy - c0.dy, _xfDownScene.dx - c0.dx);
+        final a1 = atan2(scenePoint.dy - c0.dy, scenePoint.dx - c0.dx);
+        dr = RotFrame.snap(_xfStartRot + (a1 - a0)) - _xfStartRot;
+        break;
+      case _ImageOp.delete:
+      case _ImageOp.none:
+        return;
+    }
+    _xfApply(c0, t, s, dr);
+  }
+
+  /// 以起始快照為基準：繞 [c0] 旋轉 [dr]、縮放 [s]，再平移 [t]
+  void _xfApply(Offset c0, Offset t, double s, double dr) {
+    final cNew = c0 + t;
+    Offset map(Offset q) => cNew + RotFrame.rotate((q - c0) * s, dr);
+
+    for (final st in _xfStrokesStart) {
+      final dst = st.stroke.points;
+      for (int i = 0; i < dst.length; i++) {
+        final p = st.points[i];
+        final m = map(Offset(p.x, p.y));
+        dst[i] = PointVector(m.dx, m.dy, p.pressure);
+      }
+      final ns = (st.size * s).clamp(1.0, 50.0).toDouble();
+      if (st.stroke.settings.size != ns) {
+        st.stroke.settings = st.stroke.settings.copyWith(size: ns);
+        st.stroke.invalidate();
+      }
+    }
+    for (final st in _xfImagesStart) {
+      st.image.rect = Rect.fromCenter(
+        center: map(st.rect.center),
+        width: st.rect.width * s,
+        height: st.rect.height * s,
+      );
+      st.image.rotation = RotFrame.normalize(st.rotation + dr);
+    }
+    for (int i = 0; i < _xfPolyStart.length && i < _selectedLassoPolygon.length; i++) {
+      _selectedLassoPolygon[i] = map(_xfPolyStart[i]);
+    }
+    _xfBox = Rect.fromCenter(
+      center: cNew,
+      width: _xfStartBox.width * s,
+      height: _xfStartBox.height * s,
+    );
+    _xfRot = RotFrame.normalize(_xfStartRot + dr);
+
+    if (_selectedStrokes.isNotEmpty) {
+      _bakeHistoryToPicture();
+      activeRepaintNotifier.notifyListeners();
+      notifyListeners();
+    } else {
+      viewSignal.fire();
+    }
+  }
+
+  /// 放開 / 第二根手指落下：把這次操作定案 (記一筆 Undo)。
+  /// 沒有移動 (點一下框內) → 浮出 剪下 / 複製 / 刪除 / 截圖 選單。
+  void _xfCommit() {
+    final op = _xfOp;
+    if (op == _ImageOp.none) return;
+    _xfOp = _ImageOp.none;
+
+    if (op == _ImageOp.delete) {
+      if ((_xfLastScene - selectionFrame.deleteHandle).distance <= _imageHitRadius) {
+        deleteSelection();
+      }
+      return;
+    }
+    if (!_xfMoved) {
+      if (op == _ImageOp.move) {
+        lassoMenu = LassoMenuKind.selection;
+        lassoMenuAnchor = _lassoDownScreen;
+      }
+      return;
+    }
+    _xfMoved = false;
+    final cmd = TransformSelectionCommand(
+      strokesBefore: _xfStrokesStart,
+      strokesAfter: [
+        for (final st in _selectedStrokes)
+          StrokeXformState(st, List.of(st.points), st.settings.size),
+      ],
+      imagesBefore: _xfImagesStart,
+      imagesAfter: [
+        for (final im in _selectedImages) ImageXformState(im, im.rect, im.rotation),
+      ],
+    );
+    _undoStack.add(cmd);
+    _redoStack.clear();
+    _colorSession = null; // 變換之後再換色是新的一筆
+    _markDirty();
+  }
+
+  /// 第二根手指落下：做出來的變換照樣定案，但不要浮出選單
+  void _xfSuspend() {
+    if (_xfOp == _ImageOp.none) return;
+    if (_xfMoved && _xfOp != _ImageOp.delete) {
+      _xfCommit();
+    } else {
+      _xfOp = _ImageOp.none;
+      _xfMoved = false;
+    }
+  }
+
+  /// 手勢被取消 (切換工具...)：做到一半的變換還原成按下前
+  void _xfRevert() {
+    if (_xfOp == _ImageOp.none) return;
+    if (_xfMoved && _xfOp != _ImageOp.delete) {
+      _xfApply(_xfStartBox.center, Offset.zero, 1.0, 0.0);
+      _xfBox = _xfStartBox;
+      _xfRot = _xfStartRot;
+    }
+    _xfOp = _ImageOp.none;
+    _xfMoved = false;
   }
 
   /// 繪製時發現圖片還沒解碼 → 背景載入，完成後只重繪畫布
@@ -1944,7 +2211,10 @@ class CanvasController extends ChangeNotifier {
       } else if (currentTool == DrawingTool.lasso) {
         lassoMenu = LassoMenuKind.none; // 任何新的觸碰都先收起選單
         _lassoDownScreen = position;
-        if (_selectedLassoPolygon.isNotEmpty &&
+        if (selectionTransformMode && _xfDown(scenePoint, position)) {
+          // 調整大小模式：按到外框 / 握把，已開始操作
+        } else if (!selectionTransformMode &&
+            _selectedLassoPolygon.isNotEmpty &&
             RayCasting.isPointInPolygon(scenePoint, _selectedLassoPolygon)) {
           _isDraggingSelection = true;
           _selectionDragStarted = false;
@@ -2028,6 +2298,10 @@ class CanvasController extends ChangeNotifier {
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.lasso) {
+        if (_xfOp != _ImageOp.none) {
+          _xfMove(scenePoint, position);
+          return;
+        }
         if (_isDraggingSelection) {
           // 還在「點一下」的容許範圍內先不移動，避免點擊時筆劃微微位移
           if (!_selectionDragStarted &&
@@ -2285,7 +2559,9 @@ class CanvasController extends ChangeNotifier {
         // ★ 必定通知活動層重繪（抹掉感應圓圈）
         activeRepaintNotifier.notifyListeners();
       } else if (currentTool == DrawingTool.lasso) {
-        if (_isDraggingSelection) {
+        if (_xfOp != _ImageOp.none) {
+          _xfCommit();
+        } else if (_isDraggingSelection) {
           if (_selectionDragStarted) {
             _pushSelectionMoveCommand();
           } else {
@@ -2513,7 +2789,7 @@ class CanvasController extends ChangeNotifier {
       b = b == null ? s.bounds : b.expandToInclude(s.bounds);
     }
     for (final i in _clipboardImages) {
-      b = b == null ? i.rect : b.expandToInclude(i.rect);
+      b = b == null ? i.bounds : b.expandToInclude(i.bounds);
     }
     if (b == null) return;
 
@@ -2544,6 +2820,7 @@ class CanvasController extends ChangeNotifier {
             id: PageImageStore.newId(),
             fileName: i.fileName, // 共用同一個圖檔
             rect: i.rect.shift(shift),
+            rotation: i.rotation,
           ),
         )
         .toList();
@@ -2574,6 +2851,7 @@ class CanvasController extends ChangeNotifier {
 
     _bakeHistoryToPicture();
     activeRepaintNotifier.notifyListeners();
+    beginSelectionTransform(); // 貼上後直接可以縮放 / 旋轉 / 移動
     _showHudMessage(S.current.pasted, icon: Icons.content_paste);
   }
 
@@ -2624,11 +2902,11 @@ class CanvasController extends ChangeNotifier {
     if (_selectedLassoPolygon.length >= 3) {
       final lassoPath = Path()..addPolygon(_selectedLassoPolygon, true);
       for (final img in currentPage.images) {
-        if (!img.rect.overlaps(polyBounds)) continue; // 外框不相交就不必精算
+        if (!img.bounds.overlaps(polyBounds)) continue; // 外框不相交就不必精算
         final overlap = Path.combine(
           PathOperation.intersect,
           lassoPath,
-          Path()..addRect(img.rect),
+          Path()..addPolygon(img.frame.corners, true),
         );
         if (!overlap.getBounds().isEmpty) _selectedImages.add(img);
       }

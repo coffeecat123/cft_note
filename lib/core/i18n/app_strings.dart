@@ -63,6 +63,7 @@ class S {
   String get rename => _t('重新命名', 'Rename');
   String get copy => _t('複製', 'Copy');
   String get cut => _t('剪下', 'Cut');
+  String get resize => _t('調整大小', 'Resize');
   String get paste => _t('貼上', 'Paste');
   String get share => _t('分享', 'Share');
   String get more => _t('更多', 'More');

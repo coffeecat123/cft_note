@@ -2,6 +2,7 @@
 import 'dart:math';
 import 'package:cft_note/features/canvas/domain/models/tools.dart';
 import 'package:flutter/material.dart';
+import '../../../../core/algorithms/rot_frame.dart';
 import '../../../document/domain/page_background.dart';
 import '../../domain/models/stroke_geometry.dart';
 import '../controllers/canvas_controller.dart';
@@ -103,6 +104,8 @@ class HistoryLayerPainter extends CustomPainter {
         final bmp = img.image;
         if (bmp == null) {
           controller.requestImage(img); // 尚未解碼 → 背景載入 (載入中 / 檔案遺失先畫灰底)
+          canvas.save();
+          _rotateAboutCenter(canvas, img.rect, img.rotation);
           canvas.drawRect(
             img.rect,
             Paint()..color = Colors.grey.withAlpha(img.missing ? 90 : 40),
@@ -115,14 +118,18 @@ class HistoryLayerPainter extends CustomPainter {
             canvas.drawLine(img.rect.topLeft, img.rect.bottomRight, x);
             canvas.drawLine(img.rect.topRight, img.rect.bottomLeft, x);
           }
+          canvas.restore();
           continue;
         }
+        canvas.save();
+        _rotateAboutCenter(canvas, img.rect, img.rotation);
         canvas.drawImageRect(
           bmp,
           Rect.fromLTWH(0, 0, bmp.width.toDouble(), bmp.height.toDouble()),
           img.rect,
           photoPaint,
         );
+        canvas.restore();
       }
       canvas.restore();
     }
@@ -210,8 +217,9 @@ class ActiveLayerPainter extends CustomPainter {
       canvas.drawPath(path, paint);
     }
 
-    // 已閉合的套索
-    if (controller.selectedLassoPolygon.isNotEmpty) {
+    // 已閉合的套索 (調整大小模式下改畫外框 + 握把)
+    if (controller.selectedLassoPolygon.isNotEmpty &&
+        !controller.selectionTransformMode) {
       final dashedPaint = Paint()
         ..color = Colors.blueAccent
         ..strokeWidth = 2.2
@@ -253,23 +261,43 @@ class ActiveLayerPainter extends CustomPainter {
     // 圖片模式：選取框 + 握把
     final selected = controller.selectedImage;
     if (controller.currentTool == DrawingTool.image && selected != null) {
-      _paintImageSelection(canvas, selected.rect);
+      _paintFrameHandles(canvas, selected.frame);
+    }
+    // 套索「調整大小」：和圖片編輯一樣的外框 + 握把
+    if (controller.currentTool == DrawingTool.lasso &&
+        controller.selectionTransformMode) {
+      _paintFrameHandles(canvas, controller.selectionFrame);
     }
     canvas.restore();
   }
 
-  /// 長方形外框；右下角 = 縮放握把，右上角 = 刪除握把 (大小以螢幕像素為準)
-  void _paintImageSelection(Canvas canvas, Rect rect) {
+
+  /// 旋轉外框；右下角 = 縮放握把 (以中心為基準)，上方圓形 = 旋轉握把，右上角 = 刪除握把
+  /// (大小以螢幕像素為準)
+  void _paintFrameHandles(Canvas canvas, RotFrame frame) {
     final z = controller.zoomPercentage / 100;
     final r = CanvasController.imageHandleDrawScreen / z;
     final hair = 1.0 / z;
+    final corners = frame.corners;
 
-    canvas.drawRect(
-      rect,
+    canvas.drawPath(
+      Path()..addPolygon(corners, true),
       Paint()
         ..color = Colors.blueAccent
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.0 / z,
+    );
+
+    // 旋轉握把：從上邊中點拉一條線上去
+    final topMid = frame.toScene(Offset(frame.rect.center.dx, frame.rect.top));
+    final rot = frame.rotateHandle(CanvasController.imageRotateHandleScreen / z);
+    canvas.drawLine(
+      topMid,
+      rot,
+      Paint()
+        ..color = Colors.blueAccent
+        ..strokeWidth = 1.5 / z
+        ..style = PaintingStyle.stroke,
     );
 
     void handle(Offset c, Color color) {
@@ -285,20 +313,42 @@ class ActiveLayerPainter extends CustomPainter {
     final k = r * 0.42;
 
     // 刪除 (右上角)：紅底白叉
-    final d = rect.topRight;
+    final d = corners[1];
     handle(d, Colors.redAccent);
-    canvas.drawLine(d + Offset(-k, -k), d + Offset(k, k), icon);
-    canvas.drawLine(d + Offset(-k, k), d + Offset(k, -k), icon);
+    canvas.save();
+    canvas.translate(d.dx, d.dy);
+    canvas.rotate(frame.rotation);
+    canvas.drawLine(Offset(-k, -k), Offset(k, k), icon);
+    canvas.drawLine(Offset(-k, k), Offset(k, -k), icon);
+    canvas.restore();
 
-    // 縮放 (右下角)：藍底白色斜向雙箭頭
-    final s = rect.bottomRight;
+    // 縮放 (右下角)：藍底白色斜向雙箭頭 (跟著外框轉)
+    final s = corners[2];
     handle(s, Colors.blueAccent);
-    final a = s + Offset(-k, -k), b = s + Offset(k, k), h = k * 0.9;
+    canvas.save();
+    canvas.translate(s.dx, s.dy);
+    canvas.rotate(frame.rotation);
+    final a = Offset(-k, -k), b = Offset(k, k), h = k * 0.9;
     canvas.drawLine(a, b, icon);
     canvas.drawLine(a, a + Offset(h, 0), icon);
     canvas.drawLine(a, a + Offset(0, h), icon);
     canvas.drawLine(b, b + Offset(-h, 0), icon);
     canvas.drawLine(b, b + Offset(0, -h), icon);
+    canvas.restore();
+
+    // 旋轉 (上方)：橘底白色圓弧箭頭
+    handle(rot, Colors.orangeAccent);
+    final arcR = r * 0.5;
+    canvas.drawArc(
+      Rect.fromCircle(center: rot, radius: arcR),
+      -pi * 0.15,
+      pi * 1.5,
+      false,
+      icon,
+    );
+    final tip = rot + Offset(cos(-pi * 0.15), sin(-pi * 0.15)) * arcR;
+    canvas.drawLine(tip, tip + Offset(-k * 0.2, -k * 0.95), icon);
+    canvas.drawLine(tip, tip + Offset(k * 0.95, k * 0.1), icon);
   }
 
   void _drawDashedPath(Canvas canvas, Path path, Paint paint,
@@ -316,4 +366,13 @@ class ActiveLayerPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+/// 以 [rect] 中心為原點旋轉畫布 (圖片旋轉用)
+void _rotateAboutCenter(Canvas canvas, Rect rect, double rotation) {
+  if (rotation == 0) return;
+  final c = rect.center;
+  canvas.translate(c.dx, c.dy);
+  canvas.rotate(rotation);
+  canvas.translate(-c.dx, -c.dy);
 }

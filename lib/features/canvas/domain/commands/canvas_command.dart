@@ -153,11 +153,84 @@ class TransformImageCommand implements CanvasCommand {
   final PageImage image;
   final Rect from;
   final Rect to;
-  TransformImageCommand(this.image, this.from, this.to);
+  final double fromRotation;
+  final double toRotation;
+  TransformImageCommand(
+    this.image,
+    this.from,
+    this.to, {
+    this.fromRotation = 0.0,
+    this.toRotation = 0.0,
+  });
   @override
-  void undo(List<Stroke> strokes) => image.rect = from;
+  void undo(List<Stroke> strokes) {
+    image.rect = from;
+    image.rotation = fromRotation;
+  }
+
   @override
-  void redo(List<Stroke> strokes) => image.rect = to;
+  void redo(List<Stroke> strokes) {
+    image.rect = to;
+    image.rotation = toRotation;
+  }
+}
+
+// 套索「調整大小」：同時縮放 / 旋轉多個筆劃與圖片 (筆劃的點與粗細、圖片的矩形與角度)
+class StrokeXformState {
+  final Stroke stroke;
+  final List<PointVector> points;
+  final double size;
+  const StrokeXformState(this.stroke, this.points, this.size);
+}
+
+class ImageXformState {
+  final PageImage image;
+  final Rect rect;
+  final double rotation;
+  const ImageXformState(this.image, this.rect, this.rotation);
+}
+
+class TransformSelectionCommand implements CanvasCommand {
+  final List<StrokeXformState> strokesBefore;
+  final List<StrokeXformState> strokesAfter;
+  final List<ImageXformState> imagesBefore;
+  final List<ImageXformState> imagesAfter;
+  TransformSelectionCommand({
+    required this.strokesBefore,
+    required this.strokesAfter,
+    required this.imagesBefore,
+    required this.imagesAfter,
+  });
+
+  static void _applyStrokes(List<StrokeXformState> list) {
+    for (final st in list) {
+      final s = st.stroke;
+      s.points.setAll(0, st.points);
+      if (s.settings.size != st.size) {
+        s.settings = s.settings.copyWith(size: st.size);
+      }
+      s.invalidate();
+    }
+  }
+
+  static void _applyImages(List<ImageXformState> list) {
+    for (final st in list) {
+      st.image.rect = st.rect;
+      st.image.rotation = st.rotation;
+    }
+  }
+
+  @override
+  void undo(List<Stroke> strokes) {
+    _applyStrokes(strokesBefore);
+    _applyImages(imagesBefore);
+  }
+
+  @override
+  void redo(List<Stroke> strokes) {
+    _applyStrokes(strokesAfter);
+    _applyImages(imagesAfter);
+  }
 }
 
 // 多個命令合併成一次 Undo (例如套索同時移動筆劃與圖片)
