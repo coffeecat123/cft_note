@@ -782,6 +782,32 @@ class CanvasController extends ChangeNotifier {
     _saveCurrentPageState();
   }
 
+  // ---- 書籤 ----
+  /// 工具列書籤按鈕對應的頁面 (連續模式 = 畫面上看到的那一頁)
+  int get bookmarkTargetIndex => isContinuous && pages.isNotEmpty
+      ? focusPageIndex.clamp(0, pages.length - 1)
+      : currentPageIndex;
+
+  bool get currentPageBookmarked =>
+      pages.isNotEmpty && pages[bookmarkTargetIndex].bookmarked;
+
+  void toggleBookmark(int index, {bool showHud = false}) {
+    if (index < 0 || index >= pages.length) return;
+    final page = pages[index];
+    page.bookmarked = !page.bookmarked;
+    _markDirty();
+    if (showHud) {
+      _showHudMessage(
+        page.bookmarked ? S.current.bookmarkAdded : S.current.bookmarkRemoved,
+        icon: page.bookmarked ? Icons.bookmark : Icons.bookmark_border,
+      );
+    } else {
+      notifyListeners();
+    }
+  }
+
+  void toggleCurrentBookmark() => toggleBookmark(bookmarkTargetIndex, showHud: true);
+
   void _startZoomIndicatorFadeout() {
     _zoomIndicatorTimer?.cancel();
     _zoomIndicatorTimer = Timer(const Duration(milliseconds: 700), () {

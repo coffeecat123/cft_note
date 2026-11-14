@@ -564,6 +564,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                             : null,
                       ),
                       _buildPageBackgroundButton(),
+                      _buildBookmarkButton(),
                       _buildPageListButton(),
                       _buildMoreMenu(),
                       const SizedBox(width: 4),
@@ -829,6 +830,20 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
         _controller.syncCurrentToFocus(); // 連續模式：以畫面上看到的頁面為「目前頁」
         PageBackgroundSheet.show(context, _controller);
       },
+    );
+  }
+
+  Widget _buildBookmarkButton() {
+    final on = _controller.currentPageBookmarked;
+    final s = S.of(context);
+    return IconButton(
+      icon: Icon(
+        on ? Icons.bookmark : Icons.bookmark_border,
+        size: 20,
+        color: on ? Colors.amber : context.appColors.toolbarIcon,
+      ),
+      tooltip: on ? s.removeBookmark : s.addBookmark,
+      onPressed: _controller.toggleCurrentBookmark,
     );
   }
 

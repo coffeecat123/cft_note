@@ -34,6 +34,9 @@ class NotePage {
   /// 空白頁的背景 (紙張顏色 + 格線)。PDF 頁面不使用這個欄位。
   PageBackground background;
 
+  /// 書籤：標記重要頁面，頁面列表可只顯示有書籤的頁
+  bool bookmarked;
+
   NotePage({
     required this.id,
     List<Stroke>? strokes,
@@ -48,6 +51,7 @@ class NotePage {
     this.width = 595.0,
     this.height = 842.0,
     this.background = PageBackground.standard,
+    this.bookmarked = false,
   })  : strokes = strokes ?? [],
         images = images ?? [],
         undoStack = undoStack ?? [],
@@ -69,6 +73,7 @@ class NotePage {
     width: width,
     height: height,
     background: background,
+    bookmarked: bookmarked,
   );
 
   Map<String, dynamic> toJson() => {
@@ -80,6 +85,7 @@ class NotePage {
     'pdfPageNumber': pdfPageNumber,
     'strokes': strokes.map((s) => s.toJson()).toList(),
     'images': images.map((i) => i.toJson()).toList(),
+    if (bookmarked) 'bookmarked': true,
   };
 
   factory NotePage.fromJson(Map<String, dynamic> json) {
@@ -90,6 +96,7 @@ class NotePage {
       background: PageBackground.fromJson(json['background']),
       pdfFilePath: json['pdfFilePath'] as String?,
       pdfPageNumber: json['pdfPageNumber'] as int?,
+      bookmarked: json['bookmarked'] as bool? ?? false,
       strokes: (json['strokes'] as List? ?? [])
           .map((s) => Stroke.fromJson(s as Map<String, dynamic>))
           .toList(),

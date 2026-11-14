@@ -37,6 +37,7 @@ class _PageListDialogState extends State<PageListDialog> {
   final Map<NotePage, ui.Image> _rendered = {}; // 本對話框自己渲染的縮圖 (需自行釋放)
   final Set<NotePage> _loading = {};
   bool _jumped = false;
+  bool _onlyBookmarks = false; // 只顯示書籤頁
 
   @override
   void dispose() {
@@ -78,6 +79,13 @@ class _PageListDialogState extends State<PageListDialog> {
     final screen = MediaQuery.of(context).size;
     final pages = widget.controller.pages;
     final current = widget.controller.currentPageIndex;
+    final s = S.of(context);
+    // 顯示的頁面 (原始頁碼)；篩選書籤時只留有書籤的
+    final shown = <int>[
+      for (int i = 0; i < pages.length; i++)
+        if (!_onlyBookmarks || pages[i].bookmarked) i,
+    ];
+    final bookmarkCount = pages.where((p) => p.bookmarked).length;
 
     // 尺寸依螢幕比例
     final dialogW = (screen.width * 0.6).clamp(280.0, 640.0);
@@ -99,12 +107,27 @@ class _PageListDialogState extends State<PageListDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      S.of(context).allPagesTitle(pages.length),
+                      _onlyBookmarks
+                          ? s.bookmarkedPagesTitle(bookmarkCount, pages.length)
+                          : s.allPagesTitle(pages.length),
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      _onlyBookmarks ? Icons.bookmark : Icons.bookmark_border,
+                      size: 22,
+                      color: _onlyBookmarks ? Colors.amber : null,
+                    ),
+                    tooltip: _onlyBookmarks ? s.showAllPages : s.showBookmarksOnly,
+                    onPressed: () => setState(() {
+                      _onlyBookmarks = !_onlyBookmarks;
+                      _jumped = false; // 換了清單，重新捲到目前頁
+                      if (_scroll.hasClients) _scroll.jumpTo(0);
+                    }),
                   ),
                   IconButton(
                     icon: const Icon(Icons.close, size: 20),
@@ -125,10 +148,27 @@ class _PageListDialogState extends State<PageListDialog> {
                   const labelH = 24.0;
                   final cellH = thumbBoxH + labelH;
 
+                  if (shown.isEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(pad * 2),
+                        child: Text(
+                          s.noBookmarks,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: context.cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+
                   // 第一次排版後，捲到目前頁面所在列
                   if (!_jumped) {
                     _jumped = true;
-                    final row = current ~/ cols;
+                    final pos = shown.indexOf(current);
+                    final row = (pos < 0 ? 0 : pos) ~/ cols;
                     final target = (row * (cellH + gap) - cellH * 0.5);
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (!_scroll.hasClients) return;
@@ -151,8 +191,9 @@ class _PageListDialogState extends State<PageListDialog> {
                         mainAxisSpacing: gap,
                         mainAxisExtent: cellH,
                       ),
-                      itemCount: pages.length,
-                      itemBuilder: (ctx, i) {
+                      itemCount: shown.length,
+                      itemBuilder: (ctx, k) {
+                        final i = shown[k];
                         final page = pages[i];
                         final isCurrent = i == current;
                         _ensureThumb(page, cellW);
@@ -194,6 +235,8 @@ class _PageListDialogState extends State<PageListDialog> {
       onTap: () => Navigator.pop(context, index),
       child: Column(
         children: [
+          Stack(
+            children: [
           Container(
             width: cellW,
             height: thumbBoxH,
@@ -230,6 +273,30 @@ class _PageListDialogState extends State<PageListDialog> {
                 ),
               ),
             ),
+          ),
+              // 書籤：點一下加入 / 移除 (已加入的一直顯示，沒加入的淡淡的)
+              Positioned(
+                top: 0,
+                right: 2,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    widget.controller.toggleBookmark(index);
+                    setState(() {});
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      page.bookmarked ? Icons.bookmark : Icons.bookmark_border,
+                      size: 22,
+                      color: page.bookmarked
+                          ? Colors.amber
+                          : context.cs.onSurface.withAlpha(110),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
           SizedBox(
             height: labelH,

@@ -193,6 +193,16 @@ class S {
   String get undo => _t('復原', 'Undo');
   String get redo => _t('重做', 'Redo');
   String get pageList => _t('頁面列表', 'All pages');
+  String get addBookmark => _t('加入書籤', 'Add bookmark');
+  String get removeBookmark => _t('移除書籤', 'Remove bookmark');
+  String get bookmarkAdded => _t('已加入書籤', 'Bookmarked');
+  String get bookmarkRemoved => _t('已移除書籤', 'Bookmark removed');
+  String get showBookmarksOnly => _t('只顯示書籤頁', 'Show bookmarked pages only');
+  String get showAllPages => _t('顯示所有頁面', 'Show all pages');
+  String bookmarkedPagesTitle(int n, int total) =>
+      _t('書籤頁面 ($n / $total 頁)', 'Bookmarks ($n of $total)');
+  String get noBookmarks =>
+      _t('還沒有書籤頁面\n點縮圖右上角的書籤圖示即可加入', 'No bookmarked pages yet\nTap the bookmark icon on a thumbnail to add one');
   String get prevPage => _t('上一頁', 'Previous page');
   String get nextPage => _t('下一頁', 'Next page');
   String get insertAfterThisPage => _t('在此頁後插入...', 'Insert after this page...');
