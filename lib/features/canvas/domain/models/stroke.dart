@@ -38,7 +38,7 @@ Path smoothOutlinePath(List<Offset> pts) {
 
 class Stroke {
   final List<PointVector> points;
-  final Color color;
+  Color color; // 套索換色會「就地修改」，不換物件，避免 Undo 歷史認不得筆劃
   BrushSettings settings; // 套索調整大小時會跟著縮放粗細 (改完要呼叫 invalidate)
 
   Stroke({

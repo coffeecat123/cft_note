@@ -470,6 +470,7 @@ class CanvasController extends ChangeNotifier {
   ui.Picture? cachedHistoryPicture;
   // 記錄調色剛開始時的筆劃備份
   List<Stroke>? _colorChangeInitialStrokes;
+  List<Color>? _colorChangeInitialColors;
   // 最近使用的顏色 (最多記錄 8 個)
   final List<Color> recentColors = [];
 
@@ -1259,6 +1260,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   void clearSelection() {
+    _revertPendingColorChange();
     _selectedStrokes.clear();
     _selectedImages.clear();
     _selectedLassoPolygon.clear();
@@ -1276,18 +1278,14 @@ class CanvasController extends ChangeNotifier {
     _endSelectionTransformState();
   }
 
-  // 1. 開始調色：手指按下滑桿瞬間呼叫 (記錄初始快照)
+  // 1. 開始調色：手指按下滑桿瞬間呼叫 (記錄初始顏色)
+  //   ★ 換色一律「就地修改」Stroke.color，絕不替換歷史裡的 Stroke 物件。
+  //   其他 Undo 指令都靠物件身分找筆劃；替換物件只要有一條路徑沒配對好指令，
+  //   就會留下無法 Undo 的殘留筆劃。
   void beginColorChange() {
     if (_selectedStrokes.isNotEmpty) {
-      _colorChangeInitialStrokes = _selectedStrokes
-          .map(
-            (s) => Stroke(
-              points: List.from(s.points),
-              color: s.color,
-              settings: s.settings,
-            ),
-          )
-          .toList();
+      _colorChangeInitialStrokes = List<Stroke>.of(_selectedStrokes);
+      _colorChangeInitialColors = _selectedStrokes.map((s) => s.color).toList();
     }
   }
 
@@ -1296,18 +1294,8 @@ class CanvasController extends ChangeNotifier {
     strokeColor = newColor;
 
     if (_selectedStrokes.isNotEmpty) {
-      for (int i = 0; i < _selectedStrokes.length; i++) {
-        final oldStroke = _selectedStrokes[i];
-        final index = _historyStrokes.indexOf(oldStroke);
-        if (index != -1) {
-          final updatedStroke = Stroke(
-            points: oldStroke.points,
-            color: newColor,
-            settings: oldStroke.settings,
-          );
-          _historyStrokes[index] = updatedStroke;
-          _selectedStrokes[i] = updatedStroke;
-        }
+      for (final s in _selectedStrokes) {
+        s.color = newColor;
       }
       _bakeHistoryToPicture();
       notifyListeners();
@@ -1319,34 +1307,52 @@ class CanvasController extends ChangeNotifier {
     strokeColor = finalColor;
     _schedulePrefsSave();
 
-    if (_selectedStrokes.isNotEmpty && _colorChangeInitialStrokes != null) {
+    final initStrokes = _colorChangeInitialStrokes;
+    final initColors = _colorChangeInitialColors;
+    if (_selectedStrokes.isNotEmpty && initStrokes != null && initColors != null) {
       // 同一組選取連續換色：只在「第一次」開一筆 Undo，之後都更新那一筆
       // (原色 = 第一次換色前的顏色；最後換回原色就整筆撤掉)
       final session = _colorSession;
       final inSession = session != null &&
           _undoStack.isNotEmpty &&
           identical(_undoStack.last, session);
-      final originals =
-          inSession ? session.oldStrokes : _colorChangeInitialStrokes!;
-      final changed = originals.any((s) => s.color != finalColor);
+      final targets = inSession ? session.targets : initStrokes;
+      final originals = inSession ? session.oldColors : initColors;
+      final changed = originals.any((c) => c != finalColor);
 
       if (inSession) _undoStack.removeLast();
       if (changed) {
         final cmd = ChangeStrokesColorCommand(
+          targets,
           originals,
-          List.from(_selectedStrokes),
+          List<Color>.filled(targets.length, finalColor),
         );
         _undoStack.add(cmd);
         _colorSession = cmd;
         _redoStack.clear();
         _recordRecentColor(finalColor);
       } else {
+        // 換回原色：筆劃顏色已是原色，不需任何指令
         _colorSession = null;
       }
-      _colorChangeInitialStrokes = null;
       _markDirty();
     }
+    _colorChangeInitialStrokes = null;
+    _colorChangeInitialColors = null;
     notifyListeners();
+  }
+
+  /// 調色做到一半被中斷 (選取被清掉、切工具…)：還原成調色前的顏色，不留下沒有 Undo 的變動
+  void _revertPendingColorChange() {
+    final strokes = _colorChangeInitialStrokes;
+    final colors = _colorChangeInitialColors;
+    _colorChangeInitialStrokes = null;
+    _colorChangeInitialColors = null;
+    if (strokes == null || colors == null) return;
+    for (int i = 0; i < strokes.length && i < colors.length; i++) {
+      strokes[i].color = colors[i];
+    }
+    _bakeHistoryToPicture();
   }
 
   // 4. 單次點選色塊 (喜愛顏色、最近使用等直接點擊)
@@ -1362,32 +1368,21 @@ class CanvasController extends ChangeNotifier {
     _schedulePrefsSave();
 
     if (_selectedStrokes.isNotEmpty) {
-      final List<Stroke> oldStrokes = List.from(_selectedStrokes);
-      final List<Stroke> updatedStrokes = [];
-
-      for (int i = 0; i < _selectedStrokes.length; i++) {
-        final oldStroke = _selectedStrokes[i];
-        final index = _historyStrokes.indexOf(oldStroke);
-        if (index != -1) {
-          final updatedStroke = Stroke(
-            points: oldStroke.points,
-            color: newColor,
-            settings: oldStroke.settings,
-          );
-          _historyStrokes[index] = updatedStroke;
-          _selectedStrokes[i] = updatedStroke;
-          updatedStrokes.add(updatedStroke);
+      final targets = List<Stroke>.of(_selectedStrokes);
+      final oldColors = targets.map((s) => s.color).toList();
+      if (oldColors.any((c) => c != newColor)) {
+        for (final s in targets) {
+          s.color = newColor;
         }
+        _undoStack.add(ChangeStrokesColorCommand(
+          targets,
+          oldColors,
+          List<Color>.filled(targets.length, newColor),
+        ));
+        _redoStack.clear();
+        _markDirty();
       }
-
-      // ★ 1. 加入 Undo 歷史棧：支援將文字顏色復原！
-      _undoStack.add(ChangeStrokesColorCommand(oldStrokes, updatedStrokes));
-      _redoStack.clear();
-
-      // ★ 2. 算作真正使用該顏色：加入「最近使用」歷史清單！
       _recordRecentColor(newColor);
-      _markDirty();
-
       _bakeHistoryToPicture();
       notifyListeners();
     }

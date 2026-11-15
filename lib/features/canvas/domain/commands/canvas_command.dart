@@ -2,7 +2,7 @@
 // 命令模式 (Command Pattern)：Undo / Redo
 // 從 CanvasController 抽出，同時消除 note_page.dart <-> canvas_controller.dart 的循環依賴。
 import 'dart:math' show min;
-import 'dart:ui' show Offset, Rect;
+import 'dart:ui' show Color, Offset, Rect;
 import 'package:perfect_freehand/perfect_freehand.dart';
 import '../../../document/domain/page_image.dart';
 import '../models/stroke.dart';
@@ -89,29 +89,26 @@ class MoveStrokesCommand implements CanvasCommand {
 }
 
 // 套索批次換色命令 (支援 Undo / Redo 復原舊顏色)
+// ★ 就地修改 Stroke.color，不替換物件：其他指令 (畫線 / 移動 / 橡皮擦 / 變形)
+//   都靠物件身分找筆劃，換物件會讓更早的歷史找不到它，造成 Undo 後殘留。
 class ChangeStrokesColorCommand implements CanvasCommand {
-  final List<Stroke> oldStrokes;
-  final List<Stroke> newStrokes;
+  final List<Stroke> targets;
+  final List<Color> oldColors;
+  final List<Color> newColors;
 
-  ChangeStrokesColorCommand(this.oldStrokes, this.newStrokes);
+  ChangeStrokesColorCommand(this.targets, this.oldColors, this.newColors);
 
   @override
   void undo(List<Stroke> strokes) {
-    for (int i = 0; i < newStrokes.length; i++) {
-      final index = strokes.indexOf(newStrokes[i]);
-      if (index != -1) {
-        strokes[index] = oldStrokes[i];
-      }
+    for (int i = 0; i < targets.length; i++) {
+      targets[i].color = oldColors[i];
     }
   }
 
   @override
   void redo(List<Stroke> strokes) {
-    for (int i = 0; i < oldStrokes.length; i++) {
-      final index = strokes.indexOf(oldStrokes[i]);
-      if (index != -1) {
-        strokes[index] = newStrokes[i];
-      }
+    for (int i = 0; i < targets.length; i++) {
+      targets[i].color = newColors[i];
     }
   }
 }
