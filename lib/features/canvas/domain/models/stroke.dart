@@ -47,6 +47,20 @@ class Stroke {
     required this.settings,
   });
 
+  /// 這條筆劃 (或正在畫的筆劃) 的填色 Paint：
+  /// 一般筆 = 實色；螢光筆 = 半透明疊色 (淺色紙、深色紙都一樣，深色紙上會發亮)。
+  /// 輪廓是單一聯集 Path，所以同一條螢光筆劃自己重疊的地方不會變深。
+  /// 不用正片疊底：它在深色紙上看不見，而且縮放時的點陣快取畫出來會和向量不一致。
+  static Paint paintFor(Color color, BrushSettings s) {
+    final p = Paint()..style = PaintingStyle.fill;
+    p.color = s.isHighlighter
+        ? color.withValues(alpha: s.opacity)
+        : color;
+    return p;
+  }
+
+  Paint get fillPaint => paintFor(color, settings);
+
   // ------------------------------------------------------------
   // 快取：外框 (bounds) 與筆劃輪廓 Path
   // 筆劃被移動時，points 內的 PointVector 會被「整個換新物件」，
@@ -114,11 +128,16 @@ class Stroke {
   // ------------------------------------------------------------
   /// 實際筆寬約為 size 乘上壓感變化，取半寬的保守估計
   static const double _halfWidthFactor = 0.3;
+  static const double _highlighterHalfWidthFactor = 0.5; // 螢光筆等寬，半寬 = size / 2
 
   /// 橡皮擦從 [a] 掃到 [b]、半徑 [radius] (皆為頁面座標) 是否碰到此筆劃。
   bool hitsCapsule(Offset a, Offset b, double radius) {
     if (points.isEmpty) return false;
-    final reach = radius + settings.size * _halfWidthFactor;
+    final reach = radius +
+        settings.size *
+            (settings.isHighlighter
+                ? _highlighterHalfWidthFactor
+                : _halfWidthFactor);
 
     // 外框快速排除
     final sweep = Rect.fromPoints(a, b).inflate(reach);
@@ -175,6 +194,7 @@ class Stroke {
     'thinning': settings.thinning,
     'smoothing': settings.smoothing,
     'streamline': settings.streamline,
+    if (settings.isHighlighter) ...{'highlighter': true, 'opacity': settings.opacity},
   };
 
   factory Stroke.fromJson(Map<String, dynamic> json) {
@@ -194,6 +214,13 @@ class Stroke {
         thinning: (json['thinning'] as num?)?.toDouble() ?? 0.6,
         smoothing: (json['smoothing'] as num?)?.toDouble() ?? 0.5,
         streamline: (json['streamline'] as num?)?.toDouble() ?? 0.5,
+        isHighlighter: json['highlighter'] == true,
+        // 舊檔的螢光筆沒有這欄位：沿用當時固定的 40%
+        opacity: json['highlighter'] == true
+            ? ((json['opacity'] as num?)?.toDouble() ?? 0.4)
+                .clamp(0.1, 1.0)
+                .toDouble()
+            : 1.0,
       ),
     );
   }

@@ -4,6 +4,7 @@ import 'package:cft_note/features/canvas/domain/models/tools.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/algorithms/rot_frame.dart';
 import '../../../document/domain/page_background.dart';
+import '../../domain/models/stroke.dart';
 import '../../domain/models/stroke_geometry.dart';
 import '../controllers/canvas_controller.dart';
 
@@ -195,9 +196,8 @@ class ActiveLayerPainter extends CustomPainter {
         controller.brush,
       );
 
-      final paint = Paint()
-        ..color = controller.strokeColor
-        ..style = PaintingStyle.fill;
+      // 螢光筆：半透明疊色 (與完成後的筆劃同一份 Paint 規則)
+      final paint = Stroke.paintFor(controller.strokeColor, controller.brush);
 
       // 與完成後的筆劃共用同一個產生器，放開筆時外觀不會跳
       canvas.drawPath(strokePath, paint);

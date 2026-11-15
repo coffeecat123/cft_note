@@ -185,10 +185,8 @@ class _FirstPagePainter extends CustomPainter {
     }
 
     canvas.clipRect(pageRect);
-    final paint = Paint()..style = PaintingStyle.fill;
     for (final stroke in page.strokes) {
-      paint.color = stroke.color;
-      canvas.drawPath(stroke.outlinePath, paint);
+      canvas.drawPath(stroke.outlinePath, stroke.fillPaint);
     }
     canvas.restore();
   }

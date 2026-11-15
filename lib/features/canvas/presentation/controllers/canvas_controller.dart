@@ -383,10 +383,8 @@ class CanvasController extends ChangeNotifier {
   ui.Picture _bakeStrokes(List<Stroke> strokes) {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    final paint = Paint()..style = PaintingStyle.fill;
     for (final stroke in strokes) {
-      paint.color = stroke.color;
-      canvas.drawPath(stroke.outlinePath, paint);
+      canvas.drawPath(stroke.outlinePath, stroke.fillPaint);
     }
     return recorder.endRecording();
   }
@@ -438,8 +436,37 @@ class CanvasController extends ChangeNotifier {
 
   // 繪圖工具與自訂筆刷設定
   DrawingTool currentTool = DrawingTool.pen;
-  Color strokeColor = Colors.black;
-  BrushSettings brush = BrushSettings.fountainPen; // 預設使用鋼筆設定
+  // 一般筆與螢光筆各自記一份顏色 / 筆刷；strokeColor / brush 永遠指向「目前工具」那一份，
+  // 其他地方 (調色盤、筆刷設定、預覽) 不用知道現在是哪一支筆。
+  Color _penColor = Colors.black;
+  Color _highlighterColor = const Color(0xFFFFEB3B);
+  BrushSettings _penBrush = BrushSettings.fountainPen; // 預設使用鋼筆設定
+  BrushSettings _highlighterBrush = BrushSettings.highlighterPreset;
+
+  bool get isHighlighterTool => currentTool == DrawingTool.highlighter;
+
+  /// 會留下筆跡的工具 (筆 / 螢光筆)
+  bool get _isInkTool =>
+      currentTool == DrawingTool.pen || currentTool == DrawingTool.highlighter;
+
+  Color get strokeColor => isHighlighterTool ? _highlighterColor : _penColor;
+  set strokeColor(Color c) {
+    if (isHighlighterTool) {
+      _highlighterColor = c;
+    } else {
+      _penColor = c;
+    }
+  }
+
+  BrushSettings get brush => isHighlighterTool ? _highlighterBrush : _penBrush;
+  set brush(BrushSettings b) {
+    if (isHighlighterTool) {
+      // 螢光筆一律等寬、保持螢光筆標記
+      _highlighterBrush = b.copyWith(thinning: 0.0, isHighlighter: true);
+    } else {
+      _penBrush = b.copyWith(isHighlighter: false);
+    }
+  }
   ui.Picture? cachedHistoryPicture;
   // 記錄調色剛開始時的筆劃備份
   List<Stroke>? _colorChangeInitialStrokes;
@@ -568,8 +595,10 @@ class CanvasController extends ChangeNotifier {
 
     // ★ 還原上次的畫筆 / 顏色 / 頁面顯示方式 (要在還原視野矩陣之前，連續模式的頁面位置才正確)
     final prefs = CanvasPrefs.initial;
-    brush = prefs.brush;
-    strokeColor = prefs.strokeColor;
+    _penBrush = prefs.brush.copyWith(isHighlighter: false);
+    _penColor = prefs.strokeColor;
+    _highlighterBrush = prefs.highlighterBrush;
+    _highlighterColor = prefs.highlighterColor;
     layoutMode = prefs.layoutMode;
     lastBlankBackground = prefs.lastBlankBackground;
     newPageStyle = prefs.newPageStyle;
@@ -898,8 +927,10 @@ class CanvasController extends ChangeNotifier {
     _prefsSaveTimer!.cancel();
     _prefsSaveTimer = null;
     final prefs = CanvasPrefs(
-      brush: brush,
-      strokeColor: strokeColor,
+      brush: _penBrush,
+      strokeColor: _penColor,
+      highlighterBrush: _highlighterBrush,
+      highlighterColor: _highlighterColor,
       layoutMode: layoutMode,
       recentColors: List.of(recentColors),
       favoriteColors: List.of(favoriteColors),
@@ -2041,7 +2072,7 @@ class CanvasController extends ChangeNotifier {
   void _trySnapShape() {
     _shapeHoldTimer = null;
     if (_disposed || _shapeSnapped) return;
-    if (currentTool != DrawingTool.pen || _currentPoints.length < 3) return;
+    if (!_isInkTool || _currentPoints.length < 3) return;
     if (_isScalingLocked || _gestureCancelled || _pointerPositions.length != 1) {
       return;
     }
@@ -2603,7 +2634,7 @@ class CanvasController extends ChangeNotifier {
       }
       final scenePoint = toScene(position);
 
-      if (currentTool == DrawingTool.pen) {
+      if (_isInkTool) {
         _smoothedPressure = pressure;
         _currentPoints.add(PointVector(scenePoint.dx, scenePoint.dy, pressure));
         _shapeHoldStart(position);
@@ -2680,7 +2711,7 @@ class CanvasController extends ChangeNotifier {
     if (!_isScalingLocked && _pointerPositions.length == 1) {
       final scenePoint = toScene(position);
 
-      if (currentTool == DrawingTool.pen) {
+      if (_isInkTool) {
         if (_currentPoints.isEmpty) return;
 
         // 已經變成完美形狀：手指拖曳 = 調整形狀 (起點固定)
@@ -2997,7 +3028,7 @@ class CanvasController extends ChangeNotifier {
     if (!_isScalingLocked && !_gestureCancelled && !wasTouchPan) {
       if (currentTool == DrawingTool.image) {
         _imageUp();
-      } else if (currentTool == DrawingTool.pen && _currentPoints.isNotEmpty) {
+      } else if (_isInkTool && _currentPoints.isNotEmpty) {
         _resetShapeState();
         final stroke = Stroke(
           points: List.from(_currentPoints),
@@ -3464,11 +3495,9 @@ class CanvasController extends ChangeNotifier {
   void _bakeHistoryToPicture() {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    final paint = Paint()..style = PaintingStyle.fill;
 
     for (final stroke in _historyStrokes) {
-      paint.color = stroke.color;
-      canvas.drawPath(stroke.outlinePath, paint);
+      canvas.drawPath(stroke.outlinePath, stroke.fillPaint);
     }
 
     final old = cachedHistoryPicture;
@@ -3488,12 +3517,7 @@ class CanvasController extends ChangeNotifier {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     canvas.drawPicture(base);
-    canvas.drawPath(
-      stroke.outlinePath,
-      Paint()
-        ..color = stroke.color
-        ..style = PaintingStyle.fill,
-    );
+    canvas.drawPath(stroke.outlinePath, stroke.fillPaint);
     cachedHistoryPicture = recorder.endRecording();
     _incrementalBakes++;
     _disposePictureLater(base);

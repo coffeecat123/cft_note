@@ -428,6 +428,41 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                   },
                                 ),
 
+                                // 螢光筆 (未選中切換，已選中開啟設定；顏色 / 粗細與一般筆分開)
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.highlight,
+                                    color:
+                                        _controller.currentTool ==
+                                            DrawingTool.highlighter
+                                        ? Colors.blue
+                                        : colors.toolbarIcon,
+                                    size: 20,
+                                  ),
+                                  tooltip:
+                                      _controller.currentTool ==
+                                          DrawingTool.highlighter
+                                      ? s.highlighterSettings
+                                      : s.highlighter,
+                                  onPressed: () {
+                                    if (_controller.currentTool !=
+                                        DrawingTool.highlighter) {
+                                      _controller.setTool(
+                                        DrawingTool.highlighter,
+                                      );
+                                    } else {
+                                      showModalBottomSheet(
+                                        context: context,
+                                        isScrollControlled: true,
+                                        backgroundColor: Colors.transparent,
+                                        builder: (ctx) => BrushSettingsSheet(
+                                          controller: _controller,
+                                        ),
+                                      );
+                                    }
+                                  },
+                                ),
+
                                 // 橡皮擦
                                 IconButton(
                                   icon: Icon(

@@ -1,6 +1,7 @@
 // lib/features/canvas/domain/models/tools.dart
 enum DrawingTool {
   pen,
+  highlighter, // 螢光筆：半透明疊色、等寬，有自己的顏色 / 粗細設定
   eraser,
   lasso, // 新增套索
   image, // 圖片模式：點圖片可平移 / 縮放 / 刪除

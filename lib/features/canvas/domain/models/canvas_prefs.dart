@@ -22,6 +22,10 @@ enum NewPageStyle {
 class CanvasPrefs {
   final BrushSettings brush;
   final Color strokeColor;
+
+  /// 螢光筆自己的筆刷 / 顏色 (與一般筆分開記)
+  final BrushSettings highlighterBrush;
+  final Color highlighterColor;
   final PageLayoutMode layoutMode;
   final List<Color> recentColors;
 
@@ -46,6 +50,8 @@ class CanvasPrefs {
   const CanvasPrefs({
     this.brush = BrushSettings.fountainPen,
     this.strokeColor = Colors.black,
+    this.highlighterBrush = BrushSettings.highlighterPreset,
+    this.highlighterColor = const Color(0xFFFFEB3B),
     this.layoutMode = PageLayoutMode.single,
     this.recentColors = const [],
     this.favoriteColors,
@@ -63,6 +69,8 @@ class CanvasPrefs {
   Map<String, dynamic> toJson() => {
     'brush': brush.toJson(),
     'strokeColor': strokeColor.toARGB32(),
+    'highlighterBrush': highlighterBrush.toJson(),
+    'highlighterColor': highlighterColor.toARGB32(),
     'layoutMode': layoutMode.name,
     'recentColors': recentColors.map((c) => c.toARGB32()).toList(),
     if (favoriteColors != null)
@@ -86,12 +94,20 @@ class CanvasPrefs {
     final brushJson = json['brush'];
     final color = json['strokeColor'];
     final modeName = json['layoutMode'];
+    final hlJson = json['highlighterBrush'];
+    final hlColor = json['highlighterColor'];
 
     return CanvasPrefs(
       brush: brushJson is Map
           ? BrushSettings.fromJson(Map<String, dynamic>.from(brushJson))
           : BrushSettings.fountainPen,
       strokeColor: color is int ? Color(color) : Colors.black,
+      // 螢光筆一律保持 isHighlighter = true (舊存檔沒有這欄位也一樣)
+      highlighterBrush: (hlJson is Map
+              ? BrushSettings.fromJson(Map<String, dynamic>.from(hlJson))
+              : BrushSettings.highlighterPreset)
+          .copyWith(isHighlighter: true),
+      highlighterColor: hlColor is int ? Color(hlColor) : const Color(0xFFFFEB3B),
       layoutMode: PageLayoutMode.values.firstWhere(
         (m) => m.name == modeName,
         orElse: () => PageLayoutMode.single,

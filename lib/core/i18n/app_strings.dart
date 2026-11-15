@@ -79,6 +79,9 @@ class S {
   String get themeSystem => _t('跟隨系統', 'System');
   String get themeLight => _t('淺色', 'Light');
   String get themeDark => _t('深色', 'Dark');
+  String get opacity => _t('透明度', 'Opacity');
+  String get highlighter => _t('螢光筆', 'Highlighter');
+  String get highlighterSettings => _t('螢光筆設定', 'Highlighter settings');
   String get textSize => _t('文字大小', 'Text size');
   String get textSizeSmall => _t('小', 'Small');
   String get textSizeStandard => _t('標準', 'Default');

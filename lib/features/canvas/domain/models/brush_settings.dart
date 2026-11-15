@@ -6,6 +6,8 @@ class BrushSettings {
   final double streamline; // 防手抖牽引感 (0.0 ~ 1.0)
   final bool shapeSnap; // 畫到一半停住不放 → 自動變成完美形狀 (直線 / 圓 / 矩形...)
   final bool strokeSnap; // 直線 / 曲線 / 折線的端點吸附到附近其他筆跡
+  final double opacity; // 螢光筆的不透明度 (0.1 ~ 1.0)；一般筆不使用
+  final bool isHighlighter; // 螢光筆：半透明疊色繪製 (見 Stroke.paintFor)
 
   const BrushSettings({
     this.size = 6.0,
@@ -14,6 +16,8 @@ class BrushSettings {
     this.streamline = 0.5,
     this.shapeSnap = true,
     this.strokeSnap = true,
+    this.opacity = 1.0,
+    this.isHighlighter = false,
   });
 
   BrushSettings copyWith({
@@ -23,6 +27,8 @@ class BrushSettings {
     double? streamline,
     bool? shapeSnap,
     bool? strokeSnap,
+    double? opacity,
+    bool? isHighlighter,
   }) {
     return BrushSettings(
       size: size ?? this.size,
@@ -31,6 +37,8 @@ class BrushSettings {
       streamline: streamline ?? this.streamline,
       shapeSnap: shapeSnap ?? this.shapeSnap,
       strokeSnap: strokeSnap ?? this.strokeSnap,
+      opacity: opacity ?? this.opacity,
+      isHighlighter: isHighlighter ?? this.isHighlighter,
     );
   }
 
@@ -41,6 +49,8 @@ class BrushSettings {
     'streamline': streamline,
     'shapeSnap': shapeSnap,
     'strokeSnap': strokeSnap,
+    'opacity': opacity,
+    'isHighlighter': isHighlighter,
   };
 
   /// 讀取存檔：缺欄位 / 型別不對 / 超出範圍都退回預設值，不會丟例外
@@ -60,6 +70,11 @@ class BrushSettings {
       strokeSnap: json['strokeSnap'] is bool
           ? json['strokeSnap'] as bool
           : d.strokeSnap,
+      // 舊存檔的螢光筆沒有這欄位：沿用當時固定的 40%
+      opacity: pick('opacity', json['isHighlighter'] == true ? 0.4 : d.opacity, 0.1, 1.0),
+      isHighlighter: json['isHighlighter'] is bool
+          ? json['isHighlighter'] as bool
+          : d.isHighlighter,
     );
   }
 
@@ -86,5 +101,17 @@ class BrushSettings {
     thinning: 0.3,
     smoothing: 0.8,
     streamline: 0.8, // 極強防手抖
+  );
+
+  // 4. 螢光筆：等寬 (不受壓力影響)、寬、高平滑
+  static const highlighterPreset = BrushSettings(
+    size: 20.0,
+    thinning: 0.0,
+    smoothing: 0.7,
+    streamline: 0.6,
+    shapeSnap: true,
+    strokeSnap: false,
+    opacity: 0.4,
+    isHighlighter: true,
   );
 }

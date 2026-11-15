@@ -121,6 +121,41 @@ class PdfExportService {
           if (segs.isEmpty) continue;
 
           final color = stroke.color;
+          if (stroke.settings.isHighlighter) {
+            // 螢光筆：整條畫成「單一路徑 + 單次描邊」，半透明才不會在接點疊深
+            // (逐段畫會在每個接點出現較深的圓點)。
+            final hlPath = PdfPath();
+            for (final g in segs) {
+              if (g.isLine) {
+                hlPath.addLine(Offset(g.x0, g.y0), Offset(g.x1, g.y1));
+              } else {
+                final p0 = Offset(g.x0, g.y0);
+                final p1 = Offset(g.x1, g.y1);
+                final c = Offset(g.cx, g.cy);
+                hlPath.addBezier(
+                  p0,
+                  p0 + (c - p0) * (2 / 3),
+                  p1 + (c - p1) * (2 / 3),
+                  p1,
+                );
+              }
+            }
+            final hlPen = PdfPen(
+              PdfColor(
+                (color.r * 255.0).round().clamp(0, 255),
+                (color.g * 255.0).round().clamp(0, 255),
+                (color.b * 255.0).round().clamp(0, 255),
+              ),
+              width: math.max(0.1, stroke.settings.size),
+            )
+              ..lineCap = PdfLineCap.round
+              ..lineJoin = PdfLineJoin.round;
+            graphics.save();
+            graphics.setTransparency(stroke.settings.opacity);
+            graphics.drawPath(hlPath, pen: hlPen);
+            graphics.restore();
+            continue;
+          }
           final pdfColor = PdfColor(
             (color.r * 255.0).round().clamp(0, 255),
             (color.g * 255.0).round().clamp(0, 255),

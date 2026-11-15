@@ -122,11 +122,9 @@ class RegionCapture {
       }
 
       // 全部筆劃 (圈選範圍內看得到的都算)
-      final strokePaint = ui.Paint()..style = ui.PaintingStyle.fill;
       for (final stroke in strokes) {
         if (!stroke.bounds.inflate(stroke.settings.size).overlaps(region)) continue;
-        strokePaint.color = stroke.color;
-        canvas.drawPath(stroke.outlinePath, strokePaint);
+        canvas.drawPath(stroke.outlinePath, stroke.fillPaint);
       }
 
       picture = recorder.endRecording();

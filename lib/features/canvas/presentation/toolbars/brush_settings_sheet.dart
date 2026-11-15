@@ -5,6 +5,7 @@ import 'package:perfect_freehand/perfect_freehand.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/i18n/app_strings.dart';
 import '../../domain/models/brush_settings.dart';
+import '../../domain/models/stroke.dart';
 import '../../domain/models/stroke_geometry.dart';
 import '../controllers/canvas_controller.dart';
 
@@ -34,6 +35,7 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
   Widget build(BuildContext context) {
     final s = S.of(context);
     final page = widget.controller.currentPage;
+    final isHl = widget.controller.isHighlighterTool; // 螢光筆：沒有壓感 / 預設風格
     // 預覽畫在「目前這頁的紙張顏色」上，深色紙 / 深色主題下黑色筆跡也看得到
     final previewPaper = page.isBlank ? page.background.color : Colors.white;
     return Container(
@@ -79,7 +81,7 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      s.brushStudio,
+                      isHl ? s.highlighterSettings : s.brushStudio,
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -105,39 +107,45 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                     ),
                     const SizedBox(height: 16),
 
-                    // 快速風格預設
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          _presetChip(s.presetFountain, BrushSettings.fountainPen),
-                          const SizedBox(width: 8),
-                          _presetChip(s.presetBallpoint, BrushSettings.ballpoint),
-                          const SizedBox(width: 8),
-                          _presetChip(s.presetMarker, BrushSettings.marker),
-                        ],
+                    // 快速風格預設 (螢光筆沒有)
+                    if (!isHl) ...[
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            _presetChip(
+                                s.presetFountain, BrushSettings.fountainPen),
+                            const SizedBox(width: 8),
+                            _presetChip(
+                                s.presetBallpoint, BrushSettings.ballpoint),
+                            const SizedBox(width: 8),
+                            _presetChip(s.presetMarker, BrushSettings.marker),
+                          ],
+                        ),
                       ),
-                    ),
-                    const Divider(height: 24),
+                      const Divider(height: 24),
+                    ],
 
                     // 四大調節滑桿
                     _buildSlider(
                       title: s.brushSize,
                       value: _current.size,
-                      min: 0.1,
-                      max: 40.0,
-                      divisions: ((40-0.1)/0.1).toInt(),
+                      min: isHl ? 4.0 : 0.1,
+                      max: isHl ? 50.0 : 40.0,
+                      divisions: isHl ? 46 : ((40 - 0.1) / 0.1).toInt(),
                       displayValue: '${_current.size.toStringAsFixed(1)} px',
                       onChanged: (v) => _update(_current.copyWith(size: v)),
                     ),
-                    _buildSlider(
-                      title: s.brushThinning,
-                      value: _current.thinning,
-                      min: 0.0,
-                      max: 1.0,
-                      displayValue: '${(_current.thinning * 100).toInt()}%',
-                      onChanged: (v) => _update(_current.copyWith(thinning: v)),
-                    ),
+                    if (!isHl)
+                      _buildSlider(
+                        title: s.brushThinning,
+                        value: _current.thinning,
+                        min: 0.0,
+                        max: 1.0,
+                        displayValue: '${(_current.thinning * 100).toInt()}%',
+                        onChanged: (v) =>
+                            _update(_current.copyWith(thinning: v)),
+                      ),
                     _buildSlider(
                       title: s.brushStreamline,
                       value: _current.streamline,
@@ -156,6 +164,17 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                       onChanged: (v) =>
                           _update(_current.copyWith(smoothing: v)),
                     ),
+                    if (isHl)
+                      _buildSlider(
+                        title: s.opacity,
+                        value: _current.opacity,
+                        min: 0.1,
+                        max: 0.8,
+                        divisions: 18,
+                        displayValue: '${(_current.opacity * 100).round()}%',
+                        onChanged: (v) =>
+                            _update(_current.copyWith(opacity: v)),
+                      ),
                     const SizedBox(height: 4),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
@@ -294,11 +313,7 @@ class _BrushPreviewPainter extends CustomPainter {
 
     final strokePath = StrokeGeometry.pathFor(points, settings);
 
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    canvas.drawPath(strokePath, paint);
+    canvas.drawPath(strokePath, Stroke.paintFor(color, settings));
   }
 
   @override
