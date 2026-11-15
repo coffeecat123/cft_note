@@ -14,16 +14,29 @@ import '../../features/document/data/storage_service.dart';
 class AppSettings extends ChangeNotifier {
   ThemeMode _themeMode;
   AppLanguage _language;
+  double _textScale;
+
+  /// 可選的文字縮放倍率 (小 / 標準 / 大 / 特大)
+  static const List<double> textScaleOptions = [0.85, 1.0, 1.15, 1.3];
 
   AppSettings({
     this._themeMode = ThemeMode.system,
     this._language = AppLanguage.system,
+    this._textScale = 1.0,
   }) {
     _syncCurrentStrings();
   }
 
   ThemeMode get themeMode => _themeMode;
   AppLanguage get language => _language;
+  double get textScale => _textScale;
+
+  void setTextScale(double scale) {
+    if (scale == _textScale) return;
+    _textScale = scale;
+    _save();
+    notifyListeners();
+  }
 
   /// 目前生效的字串表 (語言為「跟隨系統」時依系統語系決定)
   S get strings => S.forLanguage(_language);
@@ -59,6 +72,7 @@ class AppSettings extends ChangeNotifier {
   Map<String, dynamic> toJson() => {
         'themeMode': _themeMode.name,
         'language': _language.name,
+        'textScale': _textScale,
       };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
@@ -71,6 +85,11 @@ class AppSettings extends ChangeNotifier {
         (l) => l.name == json['language'],
         orElse: () => AppLanguage.system,
       ),
+      textScale: () {
+        final v = json['textScale'];
+        if (v is num && v >= 0.5 && v <= 2.0) return v.toDouble();
+        return 1.0;
+      }(),
     );
   }
 

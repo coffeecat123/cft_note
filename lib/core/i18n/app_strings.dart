@@ -79,6 +79,11 @@ class S {
   String get themeSystem => _t('跟隨系統', 'System');
   String get themeLight => _t('淺色', 'Light');
   String get themeDark => _t('深色', 'Dark');
+  String get textSize => _t('文字大小', 'Text size');
+  String get textSizeSmall => _t('小', 'Small');
+  String get textSizeStandard => _t('標準', 'Default');
+  String get textSizeLarge => _t('大', 'Large');
+  String get textSizeXLarge => _t('特大', 'Extra large');
   String get language => _t('語言', 'Language');
   String get languageSystem => _t('跟隨系統', 'System');
   String get languageZhTw => '繁體中文';

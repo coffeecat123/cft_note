@@ -88,6 +88,41 @@ class _SettingsBody extends StatelessWidget {
         ),
         const SizedBox(height: 20),
         _Section(
+          title: s.textSize,
+          child: SegmentedButton<double>(
+            showSelectedIcon: false,
+            segments: [
+              ButtonSegment(
+                value: AppSettings.textScaleOptions[0],
+                label: Text(s.textSizeSmall, maxLines: 1),
+              ),
+              ButtonSegment(
+                value: AppSettings.textScaleOptions[1],
+                label: Text(s.textSizeStandard, maxLines: 1),
+              ),
+              ButtonSegment(
+                value: AppSettings.textScaleOptions[2],
+                label: Text(s.textSizeLarge, maxLines: 1),
+              ),
+              ButtonSegment(
+                value: AppSettings.textScaleOptions[3],
+                label: Text(s.textSizeXLarge, maxLines: 1),
+              ),
+            ],
+            selected: {
+              // 讀到非預設值 (舊版 / 手改) 時，選取最接近的選項
+              AppSettings.textScaleOptions.reduce(
+                (a, b) => (a - settings.textScale).abs() <=
+                        (b - settings.textScale).abs()
+                    ? a
+                    : b,
+              ),
+            },
+            onSelectionChanged: (v) => settings.setTextScale(v.first),
+          ),
+        ),
+        const SizedBox(height: 20),
+        _Section(
           title: s.language,
           child: SegmentedButton<AppLanguage>(
             showSelectedIcon: false,

@@ -61,6 +61,18 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           theme: AppTheme.light,
           darkTheme: AppTheme.dark,
           themeMode: widget.settings.themeMode,
+          // ★ 文字大小：在系統字級之上再乘上設定的倍率
+          builder: (ctx, child) {
+            final mq = MediaQuery.of(ctx);
+            return MediaQuery(
+              data: mq.copyWith(
+                textScaler: TextScaler.linear(
+                  mq.textScaler.scale(1.0) * widget.settings.textScale,
+                ),
+              ),
+              child: child!,
+            );
+          },
           home: const ShelfPage(), // ★ 首頁進入筆記櫃！
         ),
       ),
