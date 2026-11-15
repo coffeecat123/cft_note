@@ -45,7 +45,11 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
         color: context.cs.surface,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      child: SafeArea(
+      // SwitchListTile 的水波紋要畫在最近的 Material 上；
+      // 外面的 DecoratedBox 有底色，所以在它裡面再放一層透明 Material
+      child: Material(
+        type: MaterialType.transparency,
+        child: SafeArea(
         top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -152,12 +156,49 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
                       onChanged: (v) =>
                           _update(_current.copyWith(smoothing: v)),
                     ),
+                    const SizedBox(height: 4),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        s.shapeSnapTitle,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      subtitle: Text(
+                        s.shapeSnapDesc,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: context.cs.onSurfaceVariant,
+                        ),
+                      ),
+                      value: _current.shapeSnap,
+                      onChanged: (v) => _update(_current.copyWith(shapeSnap: v)),
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        s.strokeSnapTitle,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      subtitle: Text(
+                        s.strokeSnapDesc,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: context.cs.onSurfaceVariant,
+                        ),
+                      ),
+                      // 沒開「按住變完美形狀」時這個選項沒作用，所以一起停用
+                      value: _current.strokeSnap,
+                      onChanged: _current.shapeSnap
+                          ? (v) => _update(_current.copyWith(strokeSnap: v))
+                          : null,
+                    ),
                     const SizedBox(height: 20),
                   ],
                 ),
               ),
             ),
           ],
+        ),
         ),
       ),
     );
@@ -171,7 +212,13 @@ class _BrushSettingsSheetState extends State<BrushSettingsSheet> {
     return ChoiceChip(
       label: Text(label, style: const TextStyle(fontSize: 12)),
       selected: isSelected,
-      onSelected: (_) => _update(preset),
+      // 套用預設時保留「按住變完美形狀」的開關
+      onSelected: (_) => _update(
+        preset.copyWith(
+          shapeSnap: _current.shapeSnap,
+          strokeSnap: _current.strokeSnap,
+        ),
+      ),
     );
   }
 

@@ -4,12 +4,16 @@ class BrushSettings {
   final double thinning; // 壓感粗細變化 (0.0 ~ 1.0)
   final double smoothing; // 平滑度 (0.0 ~ 1.0)
   final double streamline; // 防手抖牽引感 (0.0 ~ 1.0)
+  final bool shapeSnap; // 畫到一半停住不放 → 自動變成完美形狀 (直線 / 圓 / 矩形...)
+  final bool strokeSnap; // 直線 / 曲線 / 折線的端點吸附到附近其他筆跡
 
   const BrushSettings({
     this.size = 6.0,
     this.thinning = 0.6,
     this.smoothing = 0.5,
     this.streamline = 0.5,
+    this.shapeSnap = true,
+    this.strokeSnap = true,
   });
 
   BrushSettings copyWith({
@@ -17,12 +21,16 @@ class BrushSettings {
     double? thinning,
     double? smoothing,
     double? streamline,
+    bool? shapeSnap,
+    bool? strokeSnap,
   }) {
     return BrushSettings(
       size: size ?? this.size,
       thinning: thinning ?? this.thinning,
       smoothing: smoothing ?? this.smoothing,
       streamline: streamline ?? this.streamline,
+      shapeSnap: shapeSnap ?? this.shapeSnap,
+      strokeSnap: strokeSnap ?? this.strokeSnap,
     );
   }
 
@@ -31,6 +39,8 @@ class BrushSettings {
     'thinning': thinning,
     'smoothing': smoothing,
     'streamline': streamline,
+    'shapeSnap': shapeSnap,
+    'strokeSnap': strokeSnap,
   };
 
   /// 讀取存檔：缺欄位 / 型別不對 / 超出範圍都退回預設值，不會丟例外
@@ -46,6 +56,10 @@ class BrushSettings {
       thinning: pick('thinning', d.thinning, 0.0, 1.0),
       smoothing: pick('smoothing', d.smoothing, 0.0, 1.0),
       streamline: pick('streamline', d.streamline, 0.0, 1.0),
+      shapeSnap: json['shapeSnap'] is bool ? json['shapeSnap'] as bool : d.shapeSnap,
+      strokeSnap: json['strokeSnap'] is bool
+          ? json['strokeSnap'] as bool
+          : d.strokeSnap,
     );
   }
 

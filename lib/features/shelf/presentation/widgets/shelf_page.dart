@@ -274,7 +274,7 @@ class _ShelfPageState extends State<ShelfPage> {
     return LongPressDraggable<_DragItem>(
       data: item,
       delay: const Duration(milliseconds: 300),
-      hapticFeedbackOnStart: true,
+      hapticFeedbackOnStart: false,
       dragAnchorStrategy: pointerDragAnchorStrategy,
       feedback: _dragFeedback(item),
       childWhenDragging: Opacity(opacity: 0.3, child: child),

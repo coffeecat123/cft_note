@@ -286,6 +286,16 @@ class S {
   String get brushSize => _t('粗細 (Size)', 'Size');
   String get brushThinning => _t('壓感變化 (Thinning)', 'Pressure');
   String get brushStreamline => _t('防手抖牽引 (Streamline)', 'Stabilizer');
+  String get shapeSnapTitle => _t('按住自動變完美形狀', 'Hold to perfect shape');
+  String get shapeSnapDesc => _t(
+    '畫完先不要放開，停住約 0.6 秒，直線、曲線、折線、圓、橢圓、矩形、三角形等會自動變整齊；手不放開繼續拖曳可以調整 (圓與橢圓以中心縮放旋轉，折線只調整最後一段)',
+    'Pause about 0.6 s before lifting the pen to clean up a line, curve, polyline, circle, ellipse, rectangle or triangle. Keep dragging to adjust (circles and ellipses scale and rotate about their center; a polyline only adjusts its last segment).',
+  );
+  String get strokeSnapTitle => _t('端點吸附其他筆跡', 'Snap ends to other strokes');
+  String get strokeSnapDesc => _t(
+    '直線、曲線、折線變整齊後，起點與拖曳中的終點靠近其他筆跡時，會自動吸附到該筆跡上',
+    'When a cleaned-up line, curve or polyline starts or ends close to another stroke, its endpoint snaps onto that stroke.',
+  );
   String get brushSmoothing => _t('平滑修正 (Smoothing)', 'Smoothing');
 
   // 顏色

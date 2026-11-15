@@ -9,11 +9,11 @@ import 'package:cft_note/features/shelf/domain/models/notebook.dart';
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
-import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:perfect_freehand/perfect_freehand.dart';
 
 import '../../../../core/algorithms/ray_casting.dart';
 import '../../../../core/algorithms/rot_frame.dart';
+import '../../../../core/algorithms/shape_recognizer.dart';
 import '../../../../core/i18n/app_strings.dart';
 import '../../../../core/engine/repaint_signal.dart';
 import '../../domain/models/brush_settings.dart';
@@ -762,6 +762,7 @@ class CanvasController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _flinging = false;
+    _shapeHoldTimer?.cancel();
     flushPrefs();
     images.dispose();
     _saveCurrentPageState(); // ★ 核心修復：退出畫布時，立即把筆跡存回當前頁面！
@@ -1135,6 +1136,7 @@ class CanvasController extends ChangeNotifier {
       img.rotation = _imageStartRot;
     }
     _xfRevert();
+    _resetShapeState();
     _imageOp = _ImageOp.none;
     _imageStartRect = null;
     _imageDragStarted = false;
@@ -1907,6 +1909,240 @@ class CanvasController extends ChangeNotifier {
   }
 
   // ==========================================
+  // 按住自動完美形狀：畫到一半停住不放 (約 0.6 秒) → 直線 / 圓 / 橢圓 / 矩形 / 多邊形
+  // 變好之後手指繼續拖曳可以調整：起點固定，控制點跟著手指
+  // (直線 / 曲線 = 終點；折線 = 只調最後一段；圓 / 橢圓 = 以中心縮放旋轉、手指留在圓周上；
+  //  矩形 / 三角形 = 起點穿過中心的對面那一點)，放開即完成。
+  // 直線 / 曲線 / 折線的起點會吸附到最近的其他筆跡。
+  // ==========================================
+  static const Duration _shapeHoldDelay = Duration(milliseconds: 600);
+  static const double _shapeHoldSlopScreen = 6.0; // 手指抖動容許範圍 (螢幕 px)
+  Timer? _shapeHoldTimer;
+  Offset _shapeHoldAnchor = Offset.zero;
+  bool _shapeSnapped = false;
+  ShapeKind? _shapeKind;
+  List<Pt> _shapeOutline0 = const []; // 剛辨識好的輪廓 (調整時都以它為基準)
+  List<Pt>? _shapeVertices; // 折線的頂點 (只有折線需要)
+  Pt? _shapeEndSnapTarget; // 拖曳中終點目前吸附到的筆跡點
+  Pt _shapePivot = const Pt(0, 0); // 起點 (固定不動)
+  Pt _shapeH0 = const Pt(0, 0); // 控制點原本的位置
+  Pt _shapeP0 = const Pt(0, 0); // 變形當下手指的位置 (頁面座標)
+  Offset _shapeP0Screen = Offset.zero; // 同上 (螢幕座標)
+
+  double get _shapeStep => max(2.0, brush.size * 0.4);
+
+  void _shapeHoldStart(Offset screenPos) {
+    _resetShapeState();
+    if (!brush.shapeSnap) return;
+    _shapeHoldAnchor = screenPos;
+    _shapeHoldTimer = Timer(_shapeHoldDelay, _trySnapShape);
+  }
+
+  /// 手指真的移動了 (超過抖動範圍) → 重新計時
+  void _shapeHoldMoved(Offset screenPos) {
+    if (_shapeSnapped || _shapeHoldTimer == null) return;
+    if ((screenPos - _shapeHoldAnchor).distance > _shapeHoldSlopScreen) {
+      _shapeHoldAnchor = screenPos;
+      _shapeHoldTimer!.cancel();
+      _shapeHoldTimer = Timer(_shapeHoldDelay, _trySnapShape);
+    }
+  }
+
+  void _resetShapeState() {
+    _shapeHoldTimer?.cancel();
+    _shapeHoldTimer = null;
+    _shapeSnapped = false;
+    _shapeKind = null;
+    _shapeOutline0 = const [];
+    _shapeVertices = null;
+    _shapeEndSnapTarget = null;
+  }
+
+  void _trySnapShape() {
+    _shapeHoldTimer = null;
+    if (_disposed || _shapeSnapped) return;
+    if (currentTool != DrawingTool.pen || _currentPoints.length < 3) return;
+    if (_isScalingLocked || _gestureCancelled || _pointerPositions.length != 1) {
+      return;
+    }
+    final z = zoomPercentage / 100;
+    final raw = [for (final p in _currentPoints) Pt(p.x, p.y)];
+    final result = ShapeRecognizer.recognize(
+      raw,
+      minLength: 24 / z, // 至少 24 螢幕像素長才辨識
+      step: _shapeStep,
+    );
+    if (result == null) return; // 辨識不出來就維持原本的筆跡
+
+    // 直線 / 曲線 / 折線：起點吸附到最近的其他筆跡 (約 16 螢幕像素內)
+    var res = result;
+    if (!res.closed && brush.strokeSnap) {
+      final q = _nearestOtherStrokePoint(raw.first, 16 / z);
+      if (q != null) res = ShapeRecognizer.moveStart(res, q, _shapeStep);
+    }
+
+    _currentPoints
+      ..clear()
+      ..addAll([for (final q in res.outline) PointVector(q.x, q.y, 0.5)]);
+    _shapeSnapped = true;
+    _shapeKind = res.kind;
+    _shapeOutline0 = res.outline;
+    _shapeVertices = res.vertices;
+    _shapeP0 = raw.last;
+    _shapeP0Screen = _pointerPositions.values.first;
+
+    final outline = res.outline;
+    if (!res.closed) {
+      // 開放形狀：起點固定 (可能已吸附)，控制點 = 終點
+      _shapePivot = outline.first;
+      _shapeH0 = outline.last;
+    } else if (res.kind == ShapeKind.ellipse && res.center != null) {
+      // 圓 / 橢圓：以中心縮放 + 旋轉，控制點 = 手指所在的那個圓周點 (調整後手指仍在圓周上)
+      _shapePivot = res.center!;
+      var best = outline.first;
+      for (final q in outline) {
+        if (q.dist(_shapeP0) < best.dist(_shapeP0)) best = q;
+      }
+      _shapeH0 = best;
+    } else if (res.kind == ShapeKind.rectangle &&
+        res.vertices != null &&
+        res.vertices!.length == 4) {
+      // 矩形：控制點 = 離手指最近的角，固定點 = 它的對角；寬高可以分開縮放
+      final vs = res.vertices!;
+      var bi = 0;
+      for (int i = 1; i < 4; i++) {
+        if (vs[i].dist(_shapeP0) < vs[bi].dist(_shapeP0)) bi = i;
+      }
+      _shapeH0 = vs[bi];
+      _shapePivot = vs[(bi + 2) % 4];
+    } else if (res.kind == ShapeKind.polygon &&
+        res.vertices != null &&
+        res.vertices!.length == 3) {
+      // 三角形：控制點 = 離手指最近的頂點，對邊固定；頂點可以自由移動
+      final vs = res.vertices!;
+      var bi = 0;
+      for (int i = 1; i < 3; i++) {
+        if (vs[i].dist(_shapeP0) < vs[bi].dist(_shapeP0)) bi = i;
+      }
+      _shapeH0 = vs[bi];
+      _shapePivot = Pt(
+        (vs[(bi + 1) % 3].x + vs[(bi + 2) % 3].x) / 2,
+        (vs[(bi + 1) % 3].y + vs[(bi + 2) % 3].y) / 2,
+      ); // 對邊中點 (三角形調整時不會用到)
+    } else {
+      // 四邊形 / 五、六邊形：以中心 (頂點平均) 縮放 + 旋轉，
+      // 控制點 = 手指所在的輪廓點 (調整後手指仍然在輪廓上，和圓 / 橢圓一致)
+      final cp = (res.vertices != null && res.vertices!.length >= 3)
+          ? res.vertices!
+          : outline.sublist(0, outline.length - 1);
+      double cx = 0, cy = 0;
+      for (final q in cp) {
+        cx += q.x;
+        cy += q.y;
+      }
+      _shapePivot = Pt(cx / cp.length, cy / cp.length);
+      // 輪廓點很稀疏，改成「線段上離手指最近的投影點」，手指一開始就貼在邊上
+      Pt best = outline.first;
+      double bestD = double.infinity;
+      for (int k = 0; k + 1 < outline.length; k++) {
+        final a = outline[k], b = outline[k + 1];
+        final abx = b.x - a.x, aby = b.y - a.y;
+        final l2 = abx * abx + aby * aby;
+        final t = l2 < 1e-12
+            ? 0.0
+            : (((_shapeP0.x - a.x) * abx + (_shapeP0.y - a.y) * aby) / l2)
+                .clamp(0.0, 1.0)
+                .toDouble();
+        final q = Pt(a.x + abx * t, a.y + aby * t);
+        final d = q.dist(_shapeP0);
+        if (d < bestD) {
+          bestD = d;
+          best = q;
+        }
+      }
+      _shapeH0 = best;
+      if ((_shapeH0 - _shapePivot).length < 1e-6) {
+        _shapeH0 = outline[outline.length ~/ 2];
+      }
+    }
+    activeRepaintNotifier.notifyListeners();
+  }
+
+  /// 其他 (已完成的) 筆跡上離 [p] 最近的點 (線段上的投影點)；超過 [maxDist] 回傳 null
+  Pt? _nearestOtherStrokePoint(Pt p, double maxDist) {
+    Pt? best;
+    double bestD = maxDist;
+    for (final st in _historyStrokes) {
+      final pts = st.points;
+      if (pts.isEmpty) continue;
+      final bb = st.bounds.inflate(maxDist + st.settings.size);
+      if (p.x < bb.left || p.x > bb.right || p.y < bb.top || p.y > bb.bottom) {
+        continue;
+      }
+      for (int i = 0; i < pts.length; i++) {
+        final a = pts[i];
+        double qx = a.x, qy = a.y;
+        if (i + 1 < pts.length) {
+          final b = pts[i + 1];
+          final abx = b.x - a.x, aby = b.y - a.y;
+          final l2 = abx * abx + aby * aby;
+          if (l2 > 1e-12) {
+            final t = (((p.x - a.x) * abx + (p.y - a.y) * aby) / l2)
+                .clamp(0.0, 1.0)
+                .toDouble();
+            qx = a.x + abx * t;
+            qy = a.y + aby * t;
+          }
+        }
+        final d = sqrt((p.x - qx) * (p.x - qx) + (p.y - qy) * (p.y - qy));
+        if (d < bestD) {
+          bestD = d;
+          best = Pt(qx, qy);
+        }
+      }
+    }
+    return best;
+  }
+
+  /// 變形之後手指繼續移動：以起點為中心，讓控制點跟著手指縮放 / 旋轉
+  void _shapeAdjust(Offset scenePoint, Offset screenPoint) {
+    final kind = _shapeKind;
+    if (kind == null) return;
+    // 手指離開變形當下的位置不到 4 螢幕像素：不動，避免筆尖抖動破壞剛整理好的形狀
+    if ((screenPoint - _shapeP0Screen).distance < 4.0) return;
+    var h = _shapeH0 + (Pt(scenePoint.dx, scenePoint.dy) - _shapeP0);
+    // 直線 / 曲線 / 折線：拖曳中的終點靠近其他筆跡就吸附上去
+    bool snappedToStroke = false;
+    if (brush.strokeSnap &&
+        (kind == ShapeKind.line ||
+            kind == ShapeKind.curve ||
+            kind == ShapeKind.polyline)) {
+      final q = _nearestOtherStrokePoint(h, 16 / (zoomPercentage / 100));
+      if (q != null) {
+        snappedToStroke = true;
+        if (_shapeEndSnapTarget == null || _shapeEndSnapTarget!.dist(q) > 0.5) {
+        }
+        h = q;
+      }
+      _shapeEndSnapTarget = q;
+    }
+    final pts = ShapeRecognizer.adjust(
+      kind: kind,
+      outline0: _shapeOutline0,
+      pivot: _shapePivot,
+      h0: _shapeH0,
+      h: h,
+      step: _shapeStep,
+      vertices: _shapeVertices,
+      angleSnap: !snappedToStroke,
+    );
+    _currentPoints
+      ..clear()
+      ..addAll([for (final q in pts) PointVector(q.x, q.y, 0.5)]);
+    activeRepaintNotifier.notifyListeners();
+  }
+
+  // ==========================================
   // 平移：軸向鎖定 + 放手後的慣性滑動
   // ==========================================
   static const double _axisLockEnterDeg = 15.0; // 與水平 / 鉛直夾角小於此值 → 鎖單軸
@@ -2225,6 +2461,7 @@ class CanvasController extends ChangeNotifier {
       if (currentTool == DrawingTool.pen) {
         _smoothedPressure = pressure;
         _currentPoints.add(PointVector(scenePoint.dx, scenePoint.dy, pressure));
+        _shapeHoldStart(position);
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.eraser) {
@@ -2300,6 +2537,13 @@ class CanvasController extends ChangeNotifier {
 
       if (currentTool == DrawingTool.pen) {
         if (_currentPoints.isEmpty) return;
+
+        // 已經變成完美形狀：手指拖曳 = 調整形狀 (起點固定)
+        if (_shapeSnapped) {
+          _shapeAdjust(scenePoint, position);
+          return;
+        }
+        _shapeHoldMoved(position);
 
         // ★ 解決第 3 點：直接記錄真實座標！絕對不強制 clamp 拉回邊緣！
         // 過濾抖動：和上一點相距不到 0.5 螢幕像素就略過 (放大後慢慢移動時，
@@ -2556,6 +2800,7 @@ class CanvasController extends ChangeNotifier {
       if (currentTool == DrawingTool.image) {
         _imageUp();
       } else if (currentTool == DrawingTool.pen && _currentPoints.isNotEmpty) {
+        _resetShapeState();
         final stroke = Stroke(
           points: List.from(_currentPoints),
           color: strokeColor,
@@ -2705,7 +2950,6 @@ class CanvasController extends ChangeNotifier {
       // 長按已經處理完：放開時不要再被當成「點一下取消選取」而把選單關掉
       _isPotentialNewLasso = false;
       _isLassoPanning = false;
-      HapticFeedback.selectionClick();
       notifyListeners();
     });
   }
@@ -2909,13 +3153,31 @@ class CanvasController extends ChangeNotifier {
     for (final stroke in _historyStrokes) {
       if (!stroke.bounds.inflate(1.0).overlaps(polyBounds)) continue;
       bool isHit = false;
-      for (final p in stroke.points) {
+      final sp = stroke.points;
+      for (int i = 0; i < sp.length && !isHit; i++) {
+        final p = sp[i];
         if (RayCasting.isPointInPolygon(
           Offset(p.x, p.y),
           _selectedLassoPolygon,
         )) {
           isHit = true;
           break;
+        }
+        // 點很稀疏時 (例如直線只有兩個端點)，沿線段補查，圈到中間也算選到
+        if (i + 1 < sp.length) {
+          final q = sp[i + 1];
+          final len = sqrt((q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y));
+          final n = min(200, (len / 6).ceil());
+          for (int k = 1; k < n; k++) {
+            final t = k / n;
+            if (RayCasting.isPointInPolygon(
+              Offset(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t),
+              _selectedLassoPolygon,
+            )) {
+              isHit = true;
+              break;
+            }
+          }
         }
       }
 
