@@ -517,6 +517,16 @@ class CanvasController extends ChangeNotifier {
   // ==========================================
   bool _twoFingerTapCandidate = false;
   DateTime? _twoFingerDownTime;
+  DateTime? _firstFingerDownTime; // 第一根手指落下的時間 (判斷兩指是不是「同時」按下)
+  static const int _twoFingerTapMaxGapMs = 120; // 兩指落下的時間差超過這個值就不算雙指輕點
+
+  // 三指輕點 = 重做：三指幾乎同時按下、很快一起抬起、期間幾乎沒有移動
+  bool _threeFingerTapCandidate = false;
+  bool _threeFingerSession = false; // 這一輪出現過三根手指：到全部離開前都不縮放 / 平移
+  DateTime? _threeFingerDownTime;
+  List<Offset> _threeFingerInitial = const [];
+  static const int _threeFingerTapMaxGapMs = 100; // 第一指到第三指落下的時間差上限
+  static const double _threeFingerTapSlop = 12.0; // 任一指移動超過這個距離就不算輕點
   double _initialTwoFingerDistance = 0.0;
   Offset? _finger1Initial;
   Offset? _finger2Initial;
@@ -1384,7 +1394,6 @@ class CanvasController extends ChangeNotifier {
   static const double imageHandleDrawScreen = 12.0; // 握把繪製半徑 (螢幕 px)
   static const double imageRotateHandleScreen = 36.0; // 旋轉握把離上邊的距離 (螢幕 px)
   static const double _imageMinSide = 10.0; // 圖片短邊最小值 (頁面單位)
-  static const double _imageKeepVisible = 5.0; // 拖動時至少要留在紙張內的長寬 (頁面單位)
 
   PageImage? _selectedImage;
   _ImageOp _imageOp = _ImageOp.none;
@@ -1440,26 +1449,28 @@ class CanvasController extends ChangeNotifier {
     return _frameOpAt(sel.frame, toScene(screenPoint)) != _ImageOp.none;
   }
 
-  /// 圖片可以拖出紙張邊緣，只要求 (旋轉後的外框) 至少還有一小塊 ([_imageKeepVisible]) 留在紙張內，
-  /// 這樣一定抓得回來。
-  Rect _clampImageRect(Rect r, double rot) {
-    final b = RotFrame(r, rot).bounds;
+  /// 這些外框 (頁面座標) 只要有任何一個超出頁面範圍，就浮出提醒。
+  void _warnIfOutOfPage(Iterable<Rect> boxes) {
+    if (_disposed || pages.isEmpty) return;
     final pw = currentPage.width, ph = currentPage.height;
-    final keepX = min(_imageKeepVisible, b.width);
-    final keepY = min(_imageKeepVisible, b.height);
-    double dx = 0, dy = 0;
-    if (b.right < keepX) {
-      dx = keepX - b.right;
-    } else if (b.left > pw - keepX) {
-      dx = pw - keepX - b.left;
+    const eps = 0.5;
+    for (final b in boxes) {
+      if (b.left < -eps || b.top < -eps || b.right > pw + eps || b.bottom > ph + eps) {
+        _showHudMessage(
+          S.current.outOfPageWarning,
+          icon: Icons.warning_amber_rounded,
+        );
+        return;
+      }
     }
-    if (b.bottom < keepY) {
-      dy = keepY - b.bottom;
-    } else if (b.top > ph - keepY) {
-      dy = ph - keepY - b.top;
-    }
-    return r.shift(Offset(dx, dy));
   }
+
+  /// 目前套索選取內容的外框們 (筆劃 + 圖片)
+  List<Rect> get _selectionBoxes => [
+    for (final st in _selectedStrokes)
+      st.bounds.inflate(st.settings.size * 0.5),
+    for (final im in _selectedImages) im.bounds,
+  ];
 
   void _imageDown(Offset p) {
     _imageOp = _ImageOp.none;
@@ -1528,7 +1539,7 @@ class CanvasController extends ChangeNotifier {
           if (movedPx < _tapSlop) return;
           _imageDragStarted = true;
         }
-        img.rect = _clampImageRect(start.shift(p - _imageDownScene), _imageStartRot);
+        img.rect = start.shift(p - _imageDownScene); // 不再限制在頁面內，放開後超出會提醒
         break;
       case _ImageOp.resize:
         // 以圖片中心為基準等比縮放：新大小 = 手指離中心的距離 / 按下時離中心的距離
@@ -1590,6 +1601,7 @@ class CanvasController extends ChangeNotifier {
       return;
     }
     _pushImageTransform(img, start, _imageStartRot);
+    _warnIfOutOfPage([img.bounds]);
   }
 
   void _pushImageTransform(PageImage img, Rect startRect, double startRot) {
@@ -1843,6 +1855,7 @@ class CanvasController extends ChangeNotifier {
     _redoStack.clear();
     _colorSession = null; // 變換之後再換色是新的一筆
     _markDirty();
+    _warnIfOutOfPage(_selectionBoxes);
   }
 
   /// 第二根手指落下：做出來的變換照樣定案，但不要浮出選單
@@ -2403,6 +2416,7 @@ class CanvasController extends ChangeNotifier {
       _selectionDragStarted = false;
     }
     _twoFingerTapCandidate = false;
+    _threeFingerTapCandidate = false;
     _previousDistance = 0.0;
     if (_isScalingLocked) {
       _isScalingLocked = false;
@@ -2466,6 +2480,7 @@ class CanvasController extends ChangeNotifier {
       viewSignal.fire();
     }
     _resetPanTracking();
+    if (_pointerPositions.isEmpty) _firstFingerDownTime = DateTime.now();
     // 圖片工具：手指也能移動 / 縮放圖片，不套用防誤觸
     if (palmRejection && currentTool != DrawingTool.image) {
       if (kind == PointerDeviceKind.touch) {
@@ -2522,8 +2537,15 @@ class CanvasController extends ChangeNotifier {
 
       // ★ 雙指輕點判定開始：記錄初始狀態、時間與座標
       if (_pointerPositions.length == 2) {
-        _twoFingerTapCandidate = true;
-        _twoFingerDownTime = DateTime.now();
+        // 雙指輕點 = 兩指幾乎同時按下、又很快一起抬起；
+        // 第一指先按住、隔一段時間才按第二指，只是要平移 / 縮放，不算輕點
+        final nowDown = DateTime.now();
+        final firstDown = _firstFingerDownTime;
+        _twoFingerTapCandidate =
+            firstDown != null &&
+            nowDown.difference(firstDown).inMilliseconds <=
+                _twoFingerTapMaxGapMs;
+        _twoFingerDownTime = nowDown;
         final pts = _pointerPositions.values.toList();
         _finger1Initial = pts[0];
         _finger2Initial = pts[1];
@@ -2532,9 +2554,29 @@ class CanvasController extends ChangeNotifier {
         _pinchZoomed = false;
         _pendingPinchFling = null;
         _resetPinchIntent();
+        _threeFingerTapCandidate = false;
       } else {
         _twoFingerTapCandidate = false;
         _pinchZoomed = true; // 三指以上不做慣性
+        _threeFingerSession = true; // 三指以上：不縮放、不平移
+        if (_pointerPositions.length == 3) {
+          final nowDown = DateTime.now();
+          final firstDown = _firstFingerDownTime;
+          _threeFingerTapCandidate =
+              firstDown != null &&
+              nowDown.difference(firstDown).inMilliseconds <=
+                  _threeFingerTapMaxGapMs;
+          _threeFingerDownTime = nowDown;
+          _threeFingerInitial = _pointerPositions.values.toList();
+          // 第三指落下前，雙指階段可能已經讓畫面縮放 / 平移了一點：
+          // 立刻還原到手勢開始前，三指期間畫面就不會動
+          if (_threeFingerTapCandidate && _matrixBeforeGesture != null) {
+            transformation = _matrixBeforeGesture!;
+            viewSignal.fire();
+          }
+        } else {
+          _threeFingerTapCandidate = false; // 四指以上不處理
+        }
       }
 
       // 雙指誤擦復原保持不變...
@@ -2776,6 +2818,32 @@ class CanvasController extends ChangeNotifier {
           _twoFingerTapCandidate = false;
         }
       }
+      if (_threeFingerTapCandidate) {
+        if (points.length != _threeFingerInitial.length) {
+          _threeFingerTapCandidate = false;
+        } else {
+          for (int i = 0; i < points.length; i++) {
+            if ((points[i] - _threeFingerInitial[i]).distance >
+                _threeFingerTapSlop) {
+              _threeFingerTapCandidate = false;
+              break;
+            }
+          }
+        }
+      }
+      // 三指不縮放也不平移；另外兩指剛落下的前 _threeFingerTapMaxGapMs 毫秒
+      // 還可能有第三指跟上，先不動畫面 (只更新基準，避免第三指落下時畫面已被拉動)
+      final firstDown = _firstFingerDownTime;
+      final bool inThreeFingerWindow =
+          _pointerPositions.length == 2 &&
+          firstDown != null &&
+          DateTime.now().difference(firstDown).inMilliseconds <
+              _threeFingerTapMaxGapMs;
+      if (_threeFingerSession || inThreeFingerWindow) {
+        _previousDistance = currentDistance;
+        _previousMidpoint = currentMidpoint;
+        return;
+      }
       if (_previousDistance > 0 && currentDistance > 0) {
         final double rawScaleFactor = currentDistance / _previousDistance;
         final Offset rawTranslation = currentMidpoint - _previousMidpoint;
@@ -2903,6 +2971,27 @@ class CanvasController extends ChangeNotifier {
       }
     }
 
+    // 三指輕點 → 重做
+    if (_threeFingerTapCandidate && _threeFingerDownTime != null) {
+      final elapsed = DateTime.now()
+          .difference(_threeFingerDownTime!)
+          .inMilliseconds;
+      _threeFingerTapCandidate = false;
+      _threeFingerDownTime = null;
+      if (elapsed < 300) {
+        // 還原輕點期間可能產生的微小平移 / 縮放抖動
+        if (_matrixBeforeGesture != null) {
+          transformation = _matrixBeforeGesture!;
+        }
+        if (canRedo) {
+          redo();
+          _showHudMessage(S.current.redone, icon: Icons.redo);
+        } else {
+          _showHudMessage(S.current.nothingToRedo, icon: Icons.redo);
+        }
+      }
+    }
+
     _pointerPositions.remove(pointerId);
 
     if (!_isScalingLocked && !_gestureCancelled && !wasTouchPan) {
@@ -2977,6 +3066,7 @@ class CanvasController extends ChangeNotifier {
       }
       _pendingPinchFling = null;
       _isScalingLocked = false;
+      _threeFingerSession = false;
       _gestureCancelled = false;
       _previousDistance = 0.0;
 
@@ -3030,6 +3120,7 @@ class CanvasController extends ChangeNotifier {
     _colorSession = null; // 位移之後再換色是新的一筆
     _totalDragDelta = Offset.zero;
     _markDirty();
+    _warnIfOutOfPage(_selectionBoxes);
   }
 
   /// 套索工具在空白處按住：剪貼簿有內容時，時間到就浮出「貼上」

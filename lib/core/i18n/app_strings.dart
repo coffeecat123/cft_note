@@ -269,6 +269,9 @@ class S {
   String get imageDeleted => _t('已刪除圖片', 'Image deleted');
   String get undone => _t('已復原', 'Undone');
   String get nothingToUndo => _t('無可復原項目', 'Nothing to undo');
+  String get redone => _t('已重做', 'Redone');
+  String get nothingToRedo => _t('無可重做項目', 'Nothing to redo');
+  String get outOfPageWarning => _t('部分內容超出頁面，超出的部分不會顯示', 'Some content is outside the page and won\'t be shown');
   String get clipboardNoImage => _t('剪貼簿沒有圖片', 'No image on the clipboard');
   String strokesCount(int n) => _t('$n 筆', '$n ${_n(n, 'stroke', 'strokes')}');
   String imagesCount(int n) =>
