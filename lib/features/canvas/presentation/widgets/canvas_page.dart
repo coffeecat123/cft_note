@@ -654,7 +654,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                   child: Center(
                     child: GestureDetector(
                       onTap: _controller.hudMessage == null
-                          ? _controller.resetZoom
+                          ? _controller.fitPage
                           : null,
                       child: AnimatedOpacity(
                         opacity: _controller.showZoomIndicator ? 1.0 : 0.0,

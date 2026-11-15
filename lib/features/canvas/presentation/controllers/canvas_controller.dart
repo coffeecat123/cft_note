@@ -280,10 +280,12 @@ class CanvasController extends ChangeNotifier {
     transformation = Matrix4.translationValues(-dx, -dy, 0.0) * transformation;
     _syncVisiblePages();
     _scrollInteracting = true;
+    _showZoomIndicatorWhilePanning();
     viewSignal.fire();
     _scrollSettleTimer?.cancel();
     _scrollSettleTimer = Timer(const Duration(milliseconds: 150), () {
       _scrollInteracting = false;
+      if (showZoomIndicator && hudMessage == null) _startZoomIndicatorFadeout();
       refreshDetail();
       viewSignal.fire(); // 停手後切回向量筆劃
       _scheduleRasterRelease();
@@ -741,6 +743,59 @@ class CanvasController extends ChangeNotifier {
           transformation.storage[1] * transformation.storage[1],
     );
     return scaleX * 100;
+  }
+
+  /// 點縮放膠囊：把「目前這頁」依寬度或高度貼齊畫面，再點一次換成另一種 (寬 ↔ 高)。
+  ///  - 目前已經是貼齊寬度 → 改貼齊高度；已經是貼齊高度 → 改貼齊寬度。
+  ///  - 都不是時：橫向連續模式先貼齊高度，其他模式先貼齊寬度。
+  ///  - 貼齊的那一軸剛好填滿畫面；另一軸比畫面大就對齊頂端 / 左端，比畫面小就置中。
+  void fitPage() {
+    hudMessage = null;
+    if (pages.isEmpty || viewportSize.isEmpty) {
+      resetZoom();
+      return;
+    }
+    final index = (isContinuous ? focusPageIndex : currentPageIndex).clamp(
+      0,
+      pages.length - 1,
+    );
+    final p = pages[index];
+    final o = pageOrigin(index);
+    if (p.width <= 0 || p.height <= 0) {
+      resetZoom();
+      return;
+    }
+    final fw = (viewportSize.width / p.width).clamp(minScale, maxScale).toDouble();
+    final fh = (viewportSize.height / p.height).clamp(minScale, maxScale).toDouble();
+    final cur = zoomPercentage / 100;
+    bool near(double a, double b) => (a - b).abs() <= b * 0.005;
+
+    final bool toHeight;
+    if (near(cur, fw) && !near(cur, fh)) {
+      toHeight = true;
+    } else if (near(cur, fh) && !near(cur, fw)) {
+      toHeight = false;
+    } else {
+      toHeight = layoutMode == PageLayoutMode.horizontal;
+    }
+
+    final s = toHeight ? fh : fw;
+    final sw = p.width * s, sh = p.height * s;
+    final tx = sw > viewportSize.width && toHeight
+        ? -s * o.dx // 貼齊高度、頁面比畫面寬：左端對齊
+        : (viewportSize.width - sw) / 2 - s * o.dx;
+    final ty = sh > viewportSize.height && !toHeight
+        ? -s * o.dy // 貼齊寬度、頁面比畫面高：頂端對齊
+        : (viewportSize.height - sh) / 2 - s * o.dy;
+    transformation =
+        Matrix4.translationValues(tx, ty, 0.0) *
+        Matrix4.diagonal3Values(s, s, 1.0);
+
+    if (isContinuous) _syncVisiblePages();
+    showZoomIndicator = true;
+    _startZoomIndicatorFadeout();
+    notifyListeners();
+    refreshDetail();
   }
 
   // 一鍵重設回 100% 原始大小
@@ -1900,11 +1955,23 @@ class CanvasController extends ChangeNotifier {
   bool _isImagePanning = false;
   double _imagePanTotal = 0.0; // 累計平移的螢幕距離 (超過點擊容許範圍就不算「點一下取消選取」)
 
+  /// 平移 / 慣性滑動 / 滾輪捲動時也顯示目前縮放比例的膠囊 (各種工具模式都一樣)。
+  /// 倍率沒變，所以只有「剛要出現」(或正顯示文字訊息) 時才需要整頁重建一次；
+  /// 計時器先取消，等手指離開 / 滑動結束後再淡出。
+  void _showZoomIndicatorWhilePanning() {
+    final bool needsRebuild = !showZoomIndicator || hudMessage != null;
+    hudMessage = null; // 平移時顯示倍率，不顯示殘留的文字訊息
+    showZoomIndicator = true;
+    _zoomIndicatorTimer?.cancel();
+    if (needsRebuild && !_disposed) notifyListeners();
+  }
+
   void _panViewBy(Offset delta) {
     transformation =
         Matrix4.translationValues(delta.dx, delta.dy, 0.0) * transformation;
     _viewMoving = true;
     if (isContinuous) _syncVisiblePages();
+    _showZoomIndicatorWhilePanning();
     viewSignal.fire();
   }
 
@@ -2160,6 +2227,40 @@ class CanvasController extends ChangeNotifier {
   Offset? _pendingPinchFling; // 雙指其中一指離開時就算好的平移速度
   int _pendingPinchFlingAt = 0;
 
+  // 雙指意圖判斷：把兩指的移動拆成「一起動 (平移)」和「沿兩指連線相向 / 相背 (縮放)」，
+  // 各自做衰減累計，只看最近一小段時間，所以不會被一開始的動作綁住。
+  Offset? _intentPrev0, _intentPrev1;
+  Offset _intentAcc0 = Offset.zero, _intentAcc1 = Offset.zero;
+  static const double _intentDecay = 0.9; // 每個 move 事件衰減，約看最近 10 個事件
+  static const double _zoomOverPanRatio = 0.6; // 縮放分量要大於平移分量的這個倍數才算想縮放
+
+  void _resetPinchIntent() {
+    _intentPrev0 = null;
+    _intentPrev1 = null;
+    _intentAcc0 = Offset.zero;
+    _intentAcc1 = Offset.zero;
+  }
+
+  /// 更新並回傳「最近是不是縮放分量夠大」。平移時兩指間距容易小幅漂移，
+  /// 這個判斷用來避免把平移誤認成縮放。
+  bool _updatePinchIntent(Offset p0, Offset p1) {
+    final a = _intentPrev0, b = _intentPrev1;
+    if (a != null && b != null) {
+      _intentAcc0 = _intentAcc0 * _intentDecay + (p0 - a);
+      _intentAcc1 = _intentAcc1 * _intentDecay + (p1 - b);
+    }
+    _intentPrev0 = p0;
+    _intentPrev1 = p1;
+    final axis = p1 - p0;
+    final len = axis.distance;
+    if (len < 1e-6) return false;
+    final u = axis / len;
+    final pan = ((_intentAcc0 + _intentAcc1) / 2).distance;
+    final zoomVec = (_intentAcc1 - _intentAcc0) / 2;
+    final zoom = (zoomVec.dx * u.dx + zoomVec.dy * u.dy).abs();
+    return zoom > pan * _zoomOverPanRatio;
+  }
+
   bool _flinging = false;
   bool _flingStepping = false;
   Offset _flingVelocity = Offset.zero;
@@ -2257,6 +2358,7 @@ class CanvasController extends ChangeNotifier {
     _flingLastStamp = null;
     _viewMoving = false;
     _scheduleRasterRelease();
+    if (showZoomIndicator && hudMessage == null) _startZoomIndicatorFadeout();
     if (refresh && !_disposed) {
       refreshDetail();
       viewSignal.fire();
@@ -2429,6 +2531,7 @@ class CanvasController extends ChangeNotifier {
         _matrixBeforeGesture = transformation.clone();
         _pinchZoomed = false;
         _pendingPinchFling = null;
+        _resetPinchIntent();
       } else {
         _twoFingerTapCandidate = false;
         _pinchZoomed = true; // 三指以上不做慣性
@@ -2677,10 +2780,15 @@ class CanvasController extends ChangeNotifier {
         final double rawScaleFactor = currentDistance / _previousDistance;
         final Offset rawTranslation = currentMidpoint - _previousMidpoint;
 
-        // 兩指間距明顯變化 → 這次是縮放手勢 (之後不鎖軸、放手也不慣性滑動)
+        // 雙指「平移優先」：兩指間距要明顯變化 (至少 16px 且超過起始間距的 12%)
+        // 才算要縮放，這之後才加入縮放 (不鎖軸、放手也不慣性滑動)；
+        // 在那之前只平移，間距的小幅變化一律忽略。
+        // 同時要「最近的動作以相向 / 相背為主」(不是兩指一起滑)，平移時間距的漂移不算
+        final bool zoomIntent = _updatePinchIntent(points[0], points[1]);
         if (!_pinchZoomed &&
+            zoomIntent &&
             (currentDistance - _initialTwoFingerDistance).abs() >
-                max(10.0, _initialTwoFingerDistance * 0.06)) {
+                max(16.0, _initialTwoFingerDistance * 0.12)) {
           _pinchZoomed = true;
           _panSamples.clear();
         }
@@ -2698,8 +2806,9 @@ class CanvasController extends ChangeNotifier {
         );
 
         // 2. ★ 核心限制運算：預測下一刻的縮放倍率，並鉗制在 [minScale, maxScale]
-        double effectiveScaleFactor = rawScaleFactor;
-        final double projectedScale = currentScale * rawScaleFactor;
+        // 還沒確定要縮放前倍率固定為 1 (純平移)
+        double effectiveScaleFactor = _pinchZoomed ? rawScaleFactor : 1.0;
+        final double projectedScale = currentScale * effectiveScaleFactor;
 
         if (projectedScale < minScale) {
           effectiveScaleFactor = minScale / currentScale; // 貼齊下限 (30%)
@@ -2863,7 +2972,7 @@ class CanvasController extends ChangeNotifier {
           _isScalingLocked || wasTouchPan || wasImagePan || wasLassoPan;
       if (_isScalingLocked &&
           !_pinchZoomed &&
-          _panClock.elapsedMilliseconds - _pendingPinchFlingAt < 150) {
+          _panClock.elapsedMilliseconds - _pendingPinchFlingAt < 250) {
         flingV ??= _pendingPinchFling; // 第二指也很快離開才算一次滑動
       }
       _pendingPinchFling = null;
