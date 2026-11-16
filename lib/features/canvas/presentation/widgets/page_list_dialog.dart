@@ -10,7 +10,9 @@ import 'package:flutter/material.dart';
 
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/i18n/app_strings.dart';
+import '../../../document/data/page_image_store.dart';
 import '../../../document/domain/page_background.dart';
+import '../../../document/domain/page_image.dart';
 import '../../../pdf_import_export/services/pdf_service.dart';
 import '../controllers/canvas_controller.dart';
 
@@ -39,6 +41,15 @@ class _PageListDialogState extends State<PageListDialog> {
   bool _jumped = false;
   bool _onlyBookmarks = false; // 只顯示書籤頁
 
+  // 頁面上的圖片縮圖：對話框自己從檔案載入縮小版 (不動主畫布持有的 ui.Image)
+  final Map<String, ui.Image> _imgs = {}; // key = 圖檔名
+  final Set<String> _imgLoading = {};
+  final Set<String> _imgFailed = {};
+
+  // 多選刪除
+  bool _selecting = false;
+  final Set<int> _selected = {};
+
   @override
   void dispose() {
     _scroll.dispose();
@@ -46,7 +57,113 @@ class _PageListDialogState extends State<PageListDialog> {
       img.dispose();
     }
     _rendered.clear();
+    for (final img in _imgs.values) {
+      img.dispose();
+    }
+    _imgs.clear();
     super.dispose();
+  }
+
+  /// 頁面上有圖片但尚未解碼 → 載入縮小版供縮圖使用
+  void _ensureImages(NotePage page, double logicalWidth) {
+    for (final pi in page.images) {
+      if (pi.image != null ||
+          _imgs.containsKey(pi.fileName) ||
+          _imgFailed.contains(pi.fileName) ||
+          !_imgLoading.add(pi.fileName)) {
+        continue;
+      }
+      _loadImageThumb(pi, logicalWidth);
+    }
+  }
+
+  Future<void> _loadImageThumb(PageImage pi, double logicalWidth) async {
+    ui.ImmutableBuffer? buffer;
+    ui.ImageDescriptor? desc;
+    ui.Codec? codec;
+    ui.Image? result;
+    try {
+      final file = await PageImageStore.fileFor(pi);
+      if (!await file.exists()) {
+        _imgFailed.add(pi.fileName);
+        return;
+      }
+      buffer = await ui.ImmutableBuffer.fromUint8List(await file.readAsBytes());
+      desc = await ui.ImageDescriptor.encoded(buffer);
+      final dpr = mounted ? MediaQuery.of(context).devicePixelRatio : 2.0;
+      // 圖片可能佔滿整頁，解碼寬度以縮圖寬度為準 (留一點餘裕)
+      final tw = (logicalWidth * dpr * 1.5).round().clamp(64, 1024);
+      codec = await desc.instantiateCodec(
+        targetWidth: desc.width > tw ? tw : null,
+      );
+      result = (await codec.getNextFrame()).image;
+    } catch (_) {
+      _imgFailed.add(pi.fileName);
+    } finally {
+      codec?.dispose();
+      desc?.dispose();
+      buffer?.dispose();
+      _imgLoading.remove(pi.fileName);
+    }
+    if (result == null) return;
+    if (!mounted) {
+      result.dispose();
+      return;
+    }
+    setState(() => _imgs[pi.fileName] = result!);
+  }
+
+  ui.Image? _imageFor(PageImage pi) => pi.image ?? _imgs[pi.fileName];
+
+  /// 該頁圖片的載入狀態簽章 (變了縮圖才重畫)
+  int _imageSig(NotePage page) {
+    int loaded = 0;
+    for (final pi in page.images) {
+      if (_imageFor(pi) != null) loaded++;
+    }
+    return page.images.length * 1000 + loaded;
+  }
+
+  Future<void> _confirmDeleteSelected() async {
+    final s = S.of(context);
+    final n = _selected.length;
+    if (n == 0 || n >= widget.controller.pages.length) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.deleteSelectedPages),
+        content: Text(s.confirmDeletePages(n)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.cancel),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(s.delete),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final pages = widget.controller.pages;
+    final removed = [
+      for (final i in _selected)
+        if (i >= 0 && i < pages.length) pages[i],
+    ];
+    widget.controller.deletePages(Set.of(_selected));
+    for (final p in removed) {
+      _rendered.remove(p)?.dispose();
+    }
+    setState(() {
+      _selected.clear();
+      _selecting = false;
+      _jumped = false;
+    });
   }
 
   /// 該頁沒有現成底圖、但是 PDF 頁 → 渲染一張小圖
@@ -88,7 +205,7 @@ class _PageListDialogState extends State<PageListDialog> {
     final bookmarkCount = pages.where((p) => p.bookmarked).length;
 
     // 尺寸依螢幕比例
-    final dialogW = (screen.width * 0.6).clamp(280.0, 640.0);
+    final dialogW = (screen.width * 0.8);
     final dialogH = screen.height * 0.75;
     final pad = (dialogW * 0.03).clamp(8.0, 16.0);
     final gap = (dialogW * 0.025).clamp(8.0, 14.0);
@@ -107,7 +224,9 @@ class _PageListDialogState extends State<PageListDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      _onlyBookmarks
+                      _selecting
+                          ? s.selectedPagesCount(_selected.length)
+                          : _onlyBookmarks
                           ? s.bookmarkedPagesTitle(bookmarkCount, pages.length)
                           : s.allPagesTitle(pages.length),
                       style: const TextStyle(
@@ -116,22 +235,74 @@ class _PageListDialogState extends State<PageListDialog> {
                       ),
                     ),
                   ),
+                  if (_selecting) ...[
+                    TextButton(
+                      onPressed: () => setState(() {
+                        if (_selected.length == shown.length) {
+                          _selected.clear();
+                        } else {
+                          _selected
+                            ..clear()
+                            ..addAll(shown);
+                        }
+                      }),
+                      child: Text(
+                        _selected.length == shown.length && shown.isNotEmpty
+                            ? s.deselectAll
+                            : s.selectAll,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, size: 22),
+                      color: Colors.redAccent,
+                      tooltip: _selected.length >= pages.length
+                          ? s.keepAtLeastOnePage
+                          : s.deleteSelectedPages,
+                      onPressed:
+                          _selected.isEmpty || _selected.length >= pages.length
+                          ? null
+                          : _confirmDeleteSelected,
+                    ),
+                  ] else ...[
+                    IconButton(
+                      icon: Icon(
+                        _onlyBookmarks ? Icons.bookmark : Icons.bookmark_border,
+                        size: 22,
+                        color: _onlyBookmarks ? Colors.amber : null,
+                      ),
+                      tooltip: _onlyBookmarks
+                          ? s.showAllPages
+                          : s.showBookmarksOnly,
+                      onPressed: () => setState(() {
+                        _onlyBookmarks = !_onlyBookmarks;
+                        _jumped = false; // 換了清單，重新捲到目前頁
+                        if (_scroll.hasClients) _scroll.jumpTo(0);
+                      }),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.checklist_rounded, size: 22),
+                      tooltip: s.selectPages,
+                      onPressed: () => setState(() {
+                        _selecting = true;
+                        _selected.clear();
+                      }),
+                    ),
+                  ],
                   IconButton(
                     icon: Icon(
-                      _onlyBookmarks ? Icons.bookmark : Icons.bookmark_border,
-                      size: 22,
-                      color: _onlyBookmarks ? Colors.amber : null,
+                      _selecting ? Icons.done : Icons.close,
+                      size: 20,
                     ),
-                    tooltip: _onlyBookmarks ? s.showAllPages : s.showBookmarksOnly,
-                    onPressed: () => setState(() {
-                      _onlyBookmarks = !_onlyBookmarks;
-                      _jumped = false; // 換了清單，重新捲到目前頁
-                      if (_scroll.hasClients) _scroll.jumpTo(0);
-                    }),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 20),
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () {
+                      if (_selecting) {
+                        setState(() {
+                          _selecting = false;
+                          _selected.clear();
+                        });
+                      } else {
+                        Navigator.pop(context);
+                      }
+                    },
                   ),
                 ],
               ),
@@ -178,13 +349,30 @@ class _PageListDialogState extends State<PageListDialog> {
                     });
                   }
 
-                  return Scrollbar(
+                  // 捲軸加粗加長，手指才好抓；格子右側留出捲軸的位置
+                  return ScrollbarTheme(
+                    data: ScrollbarThemeData(
+                      thickness: const WidgetStatePropertyAll(10),
+                      radius: const Radius.circular(5),
+                      minThumbLength: 50,
+                      thumbColor: WidgetStatePropertyAll(
+                        context.cs.primary.withAlpha(150),
+                      ),
+                      trackColor: WidgetStatePropertyAll(
+                        context.cs.onSurface.withAlpha(18),
+                      ),
+                      trackBorderColor: const WidgetStatePropertyAll(
+                        Colors.transparent,
+                      ),
+                    ),
+                    child: Scrollbar(
                     controller: _scroll,
                     thumbVisibility: true,
+                    trackVisibility: true,
                     interactive: true,
                     child: GridView.builder(
                       controller: _scroll,
-                      padding: EdgeInsets.all(pad),
+                      padding: EdgeInsets.fromLTRB(pad, pad, pad + 20, pad),
                       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: cols,
                         crossAxisSpacing: gap,
@@ -197,6 +385,7 @@ class _PageListDialogState extends State<PageListDialog> {
                         final page = pages[i];
                         final isCurrent = i == current;
                         _ensureThumb(page, cellW);
+                        _ensureImages(page, cellW);
                         final bg =
                             page.cachedBackgroundImage ?? _rendered[page];
                         return _buildCell(
@@ -210,6 +399,7 @@ class _PageListDialogState extends State<PageListDialog> {
                         );
                       },
                     ),
+                  ),
                   );
                 },
               ),
@@ -232,7 +422,15 @@ class _PageListDialogState extends State<PageListDialog> {
     final aspect = page.width / page.height;
     return InkWell(
       borderRadius: BorderRadius.circular(8),
-      onTap: () => Navigator.pop(context, index),
+      onTap: () {
+        if (_selecting) {
+          setState(() {
+            if (!_selected.add(index)) _selected.remove(index);
+          });
+        } else {
+          Navigator.pop(context, index);
+        }
+      },
       child: Column(
         children: [
           Stack(
@@ -245,8 +443,14 @@ class _PageListDialogState extends State<PageListDialog> {
               color: context.cs.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: isCurrent ? Colors.blueAccent : context.cs.outlineVariant,
-                width: isCurrent ? 2.5 : 1,
+                color: _selecting && _selected.contains(index)
+                    ? Colors.redAccent
+                    : isCurrent
+                    ? Colors.blueAccent
+                    : context.cs.outlineVariant,
+                width: (isCurrent || (_selecting && _selected.contains(index)))
+                    ? 2.5
+                    : 1,
               ),
             ),
             padding: const EdgeInsets.all(5),
@@ -268,12 +472,28 @@ class _PageListDialogState extends State<PageListDialog> {
                       page: page,
                       bg: bg,
                       strokeCount: page.strokes.length,
+                      imageOf: _imageFor,
+                      imageSig: _imageSig(page),
                     ),
                   ),
                 ),
               ),
             ),
           ),
+              if (_selecting)
+                Positioned(
+                  top: 4,
+                  left: 4,
+                  child: Icon(
+                    _selected.contains(index)
+                        ? Icons.check_circle
+                        : Icons.radio_button_unchecked,
+                    size: 24,
+                    color: _selected.contains(index)
+                        ? Colors.blueAccent
+                        : context.cs.onSurface.withAlpha(140),
+                  ),
+                ),
               // 書籤：點一下加入 / 移除 (已加入的一直顯示，沒加入的淡淡的)
               Positioned(
                 top: 0,
@@ -288,7 +508,7 @@ class _PageListDialogState extends State<PageListDialog> {
                     padding: const EdgeInsets.all(4),
                     child: Icon(
                       page.bookmarked ? Icons.bookmark : Icons.bookmark_border,
-                      size: 22,
+                      size: 32,
                       color: page.bookmarked
                           ? Colors.amber
                           : context.cs.onSurface.withAlpha(110),
@@ -323,6 +543,10 @@ class _PageThumbPainter extends CustomPainter {
   final ui.Image? bg;
   final int strokeCount;
 
+  /// 取得頁面上某張圖片已解碼的縮圖 (沒有就回傳 null，畫灰底)
+  final ui.Image? Function(PageImage) imageOf;
+  final int imageSig;
+
   /// 建立時的背景快照 (page 是同一個物件，單靠 page 比較偵測不到背景改變)
   final PageBackground background;
 
@@ -330,6 +554,8 @@ class _PageThumbPainter extends CustomPainter {
     required this.page,
     required this.bg,
     required this.strokeCount,
+    required this.imageOf,
+    required this.imageSig,
   }) : background = page.background;
 
   @override
@@ -365,6 +591,34 @@ class _PageThumbPainter extends CustomPainter {
     }
 
     canvas.clipRect(pageRect);
+
+    // 使用者放上去的圖片 (在底圖之上、筆劃之下，與畫布相同的疊放順序)
+    final photoPaint = Paint()..filterQuality = FilterQuality.medium;
+    for (final pi in page.images) {
+      final bmp = imageOf(pi);
+      canvas.save();
+      if (pi.rotation != 0) {
+        final c = pi.rect.center;
+        canvas.translate(c.dx, c.dy);
+        canvas.rotate(pi.rotation);
+        canvas.translate(-c.dx, -c.dy);
+      }
+      if (bmp == null) {
+        canvas.drawRect(
+          pi.rect,
+          Paint()..color = Colors.grey.withAlpha(pi.missing ? 90 : 50),
+        );
+      } else {
+        canvas.drawImageRect(
+          bmp,
+          Rect.fromLTWH(0, 0, bmp.width.toDouble(), bmp.height.toDouble()),
+          pi.rect,
+          photoPaint,
+        );
+      }
+      canvas.restore();
+    }
+
     for (final stroke in page.strokes) {
       canvas.drawPath(stroke.outlinePath, stroke.fillPaint);
     }
@@ -376,5 +630,6 @@ class _PageThumbPainter extends CustomPainter {
       old.page != page ||
       old.bg != bg ||
       old.strokeCount != strokeCount ||
+      old.imageSig != imageSig ||
       old.background != background;
 }

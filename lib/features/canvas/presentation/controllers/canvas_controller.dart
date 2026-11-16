@@ -1106,6 +1106,31 @@ class CanvasController extends ChangeNotifier {
     if (isContinuous) _placeCurrent();
   }
 
+  /// 一次刪除多頁 (UI 端需先讓使用者確認)。至少要保留一頁，
+  /// 全部選取時不執行。目前頁沒被刪就繼續停在同一頁，被刪則改顯示接替它位置的頁面。
+  void deletePages(Set<int> indices) {
+    final remove = indices.where((i) => i >= 0 && i < pages.length).toList()
+      ..sort();
+    if (remove.isEmpty || remove.length >= pages.length) return;
+    final oldCurrent = currentPageIndex;
+    final currentRemoved = remove.contains(oldCurrent);
+    if (!currentRemoved) _saveCurrentPageState();
+    final keep = currentRemoved ? null : pages[oldCurrent];
+    for (final i in remove.reversed) {
+      _dropPicture(pages.removeAt(i));
+    }
+    _markDirty();
+    final int target;
+    if (keep != null) {
+      target = pages.indexOf(keep);
+    } else {
+      final before = remove.where((i) => i < oldCurrent).length;
+      target = (oldCurrent - before).clamp(0, pages.length - 1);
+    }
+    _loadPageState(target);
+    if (isContinuous) _placeCurrent();
+  }
+
   // ==========================================
   // ★ 空白頁背景 (紙張顏色 + 格線)
   //   - 可只改目前頁，或一次改此筆記本的所有空白頁 (PDF 頁面不受影響)

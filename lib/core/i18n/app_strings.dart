@@ -220,6 +220,18 @@ class S {
   String allPagesTitle(int n) =>
       _t('所有頁面 (共 $n 頁)', 'All pages ($n)');
 
+  String get selectPages => _t('選取多頁', 'Select pages');
+  String selectedPagesCount(int n) => _t('已選 $n 頁', '$n selected');
+  String get selectAll => _t('全選', 'Select all');
+  String get deselectAll => _t('取消全選', 'Deselect all');
+  String get deleteSelectedPages => _t('刪除選取的頁面', 'Delete selected pages');
+  String get keepAtLeastOnePage =>
+      _t('至少要保留一頁', 'Keep at least one page');
+  String confirmDeletePages(int n) => _t(
+        '確定要刪除選取的 $n 頁嗎？頁面上的筆跡與圖片會一併刪除，無法復原。',
+        'Delete $n selected pages? Everything on them will be deleted. This can’t be undone.',
+      );
+
   String get sysGallery => _t('系統圖庫', 'Photo library');
   String get sysFiles => _t('系統檔案', 'Files');
   String get imageLoadFailed => _t('無法載入這張圖片', 'Couldn’t load this image');
