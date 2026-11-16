@@ -429,6 +429,36 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                   },
                                 ),
 
+                                // 橡皮擦
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.cleaning_services_rounded,
+                                    color:
+                                        _controller.currentTool ==
+                                            DrawingTool.eraser
+                                        ? Colors.blue
+                                        : colors.toolbarIcon,
+                                    size: 20,
+                                  ),
+                                  // 未選中 → 切換到橡皮擦；已選中 → 調整大小 (與筆刷相同)
+                                  tooltip:
+                                      _controller.currentTool ==
+                                          DrawingTool.eraser
+                                      ? s.eraserSettings
+                                      : s.eraser,
+                                  onPressed: () {
+                                    if (_controller.currentTool !=
+                                        DrawingTool.eraser) {
+                                      _controller.setTool(DrawingTool.eraser);
+                                    } else {
+                                      EraserSettingsSheet.show(
+                                        context,
+                                        _controller,
+                                      );
+                                    }
+                                  },
+                                ),
+
                                 // 螢光筆 (未選中切換，已選中開啟設定；顏色 / 粗細與一般筆分開)
                                 IconButton(
                                   icon: Icon(
@@ -459,36 +489,6 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                         builder: (ctx) => BrushSettingsSheet(
                                           controller: _controller,
                                         ),
-                                      );
-                                    }
-                                  },
-                                ),
-
-                                // 橡皮擦
-                                IconButton(
-                                  icon: Icon(
-                                    Icons.cleaning_services_rounded,
-                                    color:
-                                        _controller.currentTool ==
-                                            DrawingTool.eraser
-                                        ? Colors.blue
-                                        : colors.toolbarIcon,
-                                    size: 20,
-                                  ),
-                                  // 未選中 → 切換到橡皮擦；已選中 → 調整大小 (與筆刷相同)
-                                  tooltip:
-                                      _controller.currentTool ==
-                                          DrawingTool.eraser
-                                      ? s.eraserSettings
-                                      : s.eraser,
-                                  onPressed: () {
-                                    if (_controller.currentTool !=
-                                        DrawingTool.eraser) {
-                                      _controller.setTool(DrawingTool.eraser);
-                                    } else {
-                                      EraserSettingsSheet.show(
-                                        context,
-                                        _controller,
                                       );
                                     }
                                   },
