@@ -47,6 +47,9 @@ class CanvasPrefs {
   /// 防誤觸：開啟後只有筆可以畫 / 操作，單指改為平移
   final bool palmRejection;
 
+  /// 手勢：雙指輕點 = 復原、三指輕點 = 重做 (預設開啟)
+  final bool gesturesEnabled;
+
   /// 截圖解析度：每個頁面單位對應幾個像素。0 = 自動 (跟隨螢幕 DPR 與目前縮放)
   final double screenshotScale;
 
@@ -66,6 +69,7 @@ class CanvasPrefs {
     this.recentBackgrounds = const [],
     this.eraserRadius = 15.0,
     this.palmRejection = false,
+    this.gesturesEnabled = true,
     this.screenshotScale = 0,
   });
 
@@ -87,6 +91,7 @@ class CanvasPrefs {
     'recentBackgrounds': recentBackgrounds.map((b) => b.toJson()).toList(),
     'eraserRadius': eraserRadius,
     'palmRejection': palmRejection,
+    'gesturesEnabled': gesturesEnabled,
     'screenshotScale': screenshotScale,
   };
 
@@ -137,6 +142,7 @@ class CanvasPrefs {
           ? (json['eraserRadius'] as num).toDouble().clamp(5.0, 60.0).toDouble()
           : 15.0,
       palmRejection: json['palmRejection'] == true,
+      gesturesEnabled: json['gesturesEnabled'] != false,
       screenshotScale: json['screenshotScale'] is num
           ? (json['screenshotScale'] as num).toDouble().clamp(0.0, 8.0).toDouble()
           : 0,

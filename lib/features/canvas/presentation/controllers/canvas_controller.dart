@@ -648,6 +648,7 @@ class CanvasController extends ChangeNotifier {
     recentBackgrounds.addAll(prefs.recentBackgrounds.take(8));
     eraserScreenRadius = prefs.eraserRadius;
     palmRejection = prefs.palmRejection;
+    gesturesEnabled = prefs.gesturesEnabled;
     screenshotScale = prefs.screenshotScale;
     if (prefs.favoriteColors != null) {
       favoriteColors
@@ -983,6 +984,7 @@ class CanvasController extends ChangeNotifier {
       recentBackgrounds: List.of(recentBackgrounds),
       eraserRadius: eraserScreenRadius,
       palmRejection: palmRejection,
+      gesturesEnabled: gesturesEnabled,
       screenshotScale: screenshotScale,
     );
     CanvasPrefs.initial = prefs; // 下次開筆記 / 切換標籤時直接用最新值
@@ -2466,6 +2468,22 @@ class CanvasController extends ChangeNotifier {
 
   void togglePalmRejection() => setPalmRejection(!palmRejection);
 
+  /// 手勢 (雙指輕點 = 復原、三指輕點 = 重做) 開關；縮放 / 平移不受影響
+  bool gesturesEnabled = true;
+
+  void setGesturesEnabled(bool value) {
+    if (gesturesEnabled == value) return;
+    gesturesEnabled = value;
+    _twoFingerTapCandidate = false;
+    _threeFingerTapCandidate = false;
+    _schedulePrefsSave();
+    _showHudMessage(
+      value ? S.current.gesturesOn : S.current.gesturesOff,
+      icon: Icons.touch_app_outlined,
+    );
+    notifyListeners();
+  }
+
   /// 截圖解析度 (每個頁面單位的像素數)；0 = 自動
   double screenshotScale = 0;
 
@@ -2622,6 +2640,7 @@ class CanvasController extends ChangeNotifier {
         final nowDown = DateTime.now();
         final firstDown = _firstFingerDownTime;
         _twoFingerTapCandidate =
+            gesturesEnabled &&
             firstDown != null &&
             nowDown.difference(firstDown).inMilliseconds <=
                 _twoFingerTapMaxGapMs;
@@ -2643,6 +2662,7 @@ class CanvasController extends ChangeNotifier {
           final nowDown = DateTime.now();
           final firstDown = _firstFingerDownTime;
           _threeFingerTapCandidate =
+              gesturesEnabled &&
               firstDown != null &&
               nowDown.difference(firstDown).inMilliseconds <=
                   _threeFingerTapMaxGapMs;

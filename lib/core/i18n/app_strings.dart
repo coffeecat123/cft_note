@@ -251,6 +251,23 @@ class S {
   String get palmRejection => _t('防誤觸', 'Palm rejection');
   String get palmRejectionOn => _t('防誤觸：開 (僅限 Pencil)', 'Palm rejection on (pen only)');
   String get palmRejectionOff => _t('防誤觸：關', 'Palm rejection off');
+  String get gestureGuide => _t('手勢說明', 'Gestures');
+  String get gesturesEnable => _t('啟用手勢', 'Enable gestures');
+  String get gesturesOn => _t('手勢：開', 'Gestures on');
+  String get gesturesOff => _t('手勢：關', 'Gestures off');
+  String get gestureTwoFingerTap => _t('雙指輕點', 'Two-finger tap');
+  String get gestureTwoFingerTapDesc =>
+      _t('兩指同時輕點畫面：復原上一步', 'Tap with two fingers at once: undo');
+  String get gestureThreeFingerTap => _t('三指輕點', 'Three-finger tap');
+  String get gestureThreeFingerTapDesc =>
+      _t('三指同時輕點畫面：重做', 'Tap with three fingers at once: redo');
+  String get gesturePinchPan => _t('雙指縮放 / 平移', 'Pinch / two-finger pan');
+  String get gesturePinchPanDesc =>
+      _t('兩指捏合縮放畫面、一起拖動平移', 'Pinch to zoom, drag together to pan');
+  String get gestureAlwaysOnHint => _t(
+    '縮放與平移一律可用，不受手勢開關影響。',
+    'Zoom and pan are always available regardless of this switch.',
+  );
   String get screenshotQuality => _t('截圖解析度', 'Screenshot resolution');
   String get screenshotQualityAuto => _t('自動 (依畫面縮放)', 'Auto (follows zoom)');
   String screenshotQualityOption(double x) => _t(

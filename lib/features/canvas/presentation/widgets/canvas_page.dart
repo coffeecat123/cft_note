@@ -917,6 +917,8 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           _showScreenshotQualityDialog();
         } else if (value == 'palm') {
           _controller.togglePalmRejection();
+        } else if (value == 'gestures') {
+          _showGestureGuideDialog();
         } else if (value == 'clear_page') {
           _confirmClearCurrentPage();
         }
@@ -964,6 +966,34 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
                   color: _controller.palmRejection
+                      ? Colors.blueAccent
+                      : context.cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'gestures',
+          child: Row(
+            children: [
+              Icon(
+                Icons.touch_app_outlined,
+                size: 18,
+                color: _controller.gesturesEnabled
+                    ? Colors.blueAccent
+                    : Colors.grey,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(s.gestureGuide, style: const TextStyle(fontSize: 13)),
+              ),
+              Text(
+                _controller.gesturesEnabled ? s.stateOn : s.stateOff,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: _controller.gesturesEnabled
                       ? Colors.blueAccent
                       : context.cs.onSurfaceVariant,
                 ),
@@ -1051,6 +1081,116 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           ),
         ),
       ],
+    );
+  }
+
+  /// 手勢說明 + 手勢開關 (雙指輕點復原 / 三指輕點重做)
+  Future<void> _showGestureGuideDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final s = S.of(ctx);
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            final on = _controller.gesturesEnabled;
+            Widget row(IconData icon, String title, String desc) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(icon, size: 20, color: Colors.blueAccent),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          desc,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: ctx.cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+            return AlertDialog(
+              title: Text(s.gestureGuide, style: const TextStyle(fontSize: 16)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        s.gesturesEnable,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      value: on,
+                      onChanged: (v) {
+                        _controller.setGesturesEnabled(v);
+                        setLocal(() {});
+                        if (mounted) setState(() {});
+                      },
+                    ),
+                    const Divider(height: 16),
+                    Opacity(
+                      opacity: on ? 1 : 0.45,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          row(
+                            Icons.undo,
+                            s.gestureTwoFingerTap,
+                            s.gestureTwoFingerTapDesc,
+                          ),
+                          row(
+                            Icons.redo,
+                            s.gestureThreeFingerTap,
+                            s.gestureThreeFingerTapDesc,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 16),
+                    row(
+                      Icons.zoom_out_map,
+                      s.gesturePinchPan,
+                      s.gesturePinchPanDesc,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      s.gestureAlwaysOnHint,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: ctx.cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(s.close),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
