@@ -16,6 +16,7 @@ import '../../../../core/algorithms/rot_frame.dart';
 import '../../../../core/algorithms/shape_recognizer.dart';
 import '../../../../core/i18n/app_strings.dart';
 import '../../../../core/engine/repaint_signal.dart';
+import '../../../../core/engine/tile_planner.dart';
 import '../../domain/models/brush_settings.dart';
 import '../../domain/models/canvas_prefs.dart';
 import '../../domain/models/stroke.dart';
@@ -40,7 +41,18 @@ enum _ImageOp { none, move, resize, rotate, delete }
 class StrokeRaster {
   final ui.Picture source; // 烘焙來源：用 identity 判斷筆劃是否變動過
   final ui.Image? image;
-  const StrokeRaster(this.source, this.image);
+  final ui.Rect rect; // 點陣涵蓋的頁面範圍 (頁面座標)
+  final double scale; // 烘焙時每個頁面單位的像素數
+  final DateTime bakedAt;
+  StrokeRaster(this.source, this.image, [this.rect = ui.Rect.zero, this.scale = 0])
+    : bakedAt = DateTime.now();
+}
+
+/// [CanvasController.rasterFor] 的回傳：點陣圖與它對應的頁面範圍
+class RasterView {
+  final ui.Image image;
+  final ui.Rect rect;
+  const RasterView(this.image, this.rect);
 }
 
 class CanvasController extends ChangeNotifier {
@@ -308,28 +320,59 @@ class CanvasController extends ChangeNotifier {
 
   bool get isViewInteracting => _viewMoving || _scrollInteracting;
 
-  /// 互動中回傳該頁的筆劃點陣圖 (座標 = 頁面大小)；回傳 null 請直接畫向量。
-  ui.Image? rasterFor(int i) {
+  /// 互動中回傳「目前可視範圍」的筆劃點陣圖 (解析度 = 螢幕實際像素，不受整頁大小限制)；
+  /// [visible] 為可視範圍 (該頁座標，已裁在紙張內)。回傳 null 請直接畫向量。
+  RasterView? rasterFor(int i, ui.Rect visible) {
     if (!isViewInteracting) return null;
     if (i < 0 || i >= pages.length) return null;
+    if (visible.width <= 0 || visible.height <= 0) return null;
     final pic = pictureFor(i);
     if (pic == null) return null;
     final page = pages[i];
 
     var r = _rasters.remove(page); // 取出再放回 = 最近使用排最後
-    if (r == null || !identical(r.source, pic)) {
-      r?.image?.dispose();
-      r = _bakeRaster(page, i, pic);
+    var rebake = r == null || !identical(r.source, pic);
+    if (!rebake && r.image != null) {
+      final plan = _rasterPlan(page, visible);
+      final covered = TilePlanner.covers(
+        outerL: r.rect.left, outerT: r.rect.top,
+        outerR: r.rect.right, outerB: r.rect.bottom,
+        innerL: visible.left, innerT: visible.top,
+        innerR: visible.right, innerB: visible.bottom,
+      );
+      // 範圍不夠 / 放大後解析度不足 → 重烘；連續縮放時 90ms 內只重烘一次
+      final needs = !covered || r.scale < plan.scale * 0.8;
+      final recent = DateTime.now().difference(r.bakedAt).inMilliseconds < 90;
+      rebake = needs && !recent;
     }
-    _rasters[page] = r;
+    if (rebake) {
+      r?.image?.dispose();
+      r = _bakeRaster(page, i, pic, visible);
+    }
+    _rasters[page] = r!;
     _rasterReleaseTimer?.cancel();
     while (_rasters.length > _rasterMaxPages) {
       _rasters.remove(_rasters.keys.first)?.image?.dispose();
     }
-    return r.image;
+    final img = r.image;
+    return img == null ? null : RasterView(img, r.rect);
   }
 
-  StrokeRaster _bakeRaster(NotePage page, int i, ui.Picture pic) {
+  TilePlan _rasterPlan(NotePage page, ui.Rect vis) {
+    final dpr = ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
+    return TilePlanner.plan(
+      pageW: page.width,
+      pageH: page.height,
+      visLeft: vis.left,
+      visTop: vis.top,
+      visRight: vis.right,
+      visBottom: vis.bottom,
+      zoom: zoomPercentage / 100,
+      dpr: dpr,
+    );
+  }
+
+  StrokeRaster _bakeRaster(NotePage page, int i, ui.Picture pic, ui.Rect vis) {
     final strokes = i == currentPageIndex ? _historyStrokes : page.strokes;
     int cost = 0;
     for (final st in strokes) {
@@ -337,27 +380,26 @@ class CanvasController extends ChangeNotifier {
       if (cost >= _rasterMinPoints) break;
     }
     if (cost < _rasterMinPoints) return StrokeRaster(pic, null);
+    if (page.width <= 0 || page.height <= 0) return StrokeRaster(pic, null);
 
-    final w = page.width, h = page.height;
-    if (w <= 0 || h <= 0) return StrokeRaster(pic, null);
-    final dpr = ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
-    final zoom = max(1.0, zoomPercentage / 100);
-    final maxPixels = isContinuous ? 3e6 : 8e6; // 連續模式同時有多頁，每頁小一點
-    final scale = min(
-      dpr * zoom,
-      min(4096.0 / max(w, h), sqrt(maxPixels / (w * h))),
-    );
-    final pw = max(1, (w * scale).ceil());
-    final ph = max(1, (h * scale).ceil());
+    final plan = _rasterPlan(page, vis);
+    final pw = max(1, (plan.width * plan.scale).ceil());
+    final ph = max(1, (plan.height * plan.scale).ceil());
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    canvas.scale(pw / w, ph / h);
+    canvas.scale(pw / plan.width, ph / plan.height);
+    canvas.translate(-plan.left, -plan.top);
     canvas.drawPicture(pic);
     final baked = recorder.endRecording();
     final image = baked.toImageSync(pw, ph);
     _disposePictureLater(baked);
-    return StrokeRaster(pic, image);
+    return StrokeRaster(
+      pic,
+      image,
+      ui.Rect.fromLTRB(plan.left, plan.top, plan.right, plan.bottom),
+      plan.scale,
+    );
   }
 
   void _scheduleRasterRelease() {
@@ -606,6 +648,7 @@ class CanvasController extends ChangeNotifier {
     recentBackgrounds.addAll(prefs.recentBackgrounds.take(8));
     eraserScreenRadius = prefs.eraserRadius;
     palmRejection = prefs.palmRejection;
+    screenshotScale = prefs.screenshotScale;
     if (prefs.favoriteColors != null) {
       favoriteColors
         ..clear()
@@ -940,6 +983,7 @@ class CanvasController extends ChangeNotifier {
       recentBackgrounds: List.of(recentBackgrounds),
       eraserRadius: eraserScreenRadius,
       palmRejection: palmRejection,
+      screenshotScale: screenshotScale,
     );
     CanvasPrefs.initial = prefs; // 下次開筆記 / 切換標籤時直接用最新值
     unawaited(StorageService.saveCanvasPrefs(prefs.toJson()));
@@ -2422,6 +2466,16 @@ class CanvasController extends ChangeNotifier {
 
   void togglePalmRejection() => setPalmRejection(!palmRejection);
 
+  /// 截圖解析度 (每個頁面單位的像素數)；0 = 自動
+  double screenshotScale = 0;
+
+  void setScreenshotScale(double value) {
+    if (screenshotScale == value) return;
+    screenshotScale = value;
+    _schedulePrefsSave();
+    notifyListeners();
+  }
+
   /// 防誤觸：筆落下時，已經按在畫面上的手指一律當成手掌丟掉
   void _dropTouchesForPen() {
     if (_touchIds.isEmpty) return;
@@ -3359,7 +3413,10 @@ class CanvasController extends ChangeNotifier {
     if (region.width < 1 || region.height < 1) return null;
 
     final dpr = ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
-    final scale = (dpr * max(1.0, zoomPercentage / 100)).clamp(2.0, 8.0).toDouble();
+    // 使用者指定解析度 → 直接用 (太大時 RegionCapture 會自動降倍率)；0 = 自動
+    final scale = screenshotScale > 0
+        ? screenshotScale
+        : (dpr * max(1.0, zoomPercentage / 100)).clamp(2.0, 8.0).toDouble();
     return RegionCapture.renderPng(
       page: currentPage,
       strokes: List.of(_historyStrokes),

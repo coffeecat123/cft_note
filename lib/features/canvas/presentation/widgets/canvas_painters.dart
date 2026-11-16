@@ -31,7 +31,7 @@ class HistoryLayerPainter extends CustomPainter {
       final origin = controller.pageOrigin(i);
       canvas.save();
       canvas.translate(origin.dx, origin.dy);
-      _paintPage(canvas, i, continuous);
+      _paintPage(canvas, i, continuous, view.shift(-origin));
       canvas.restore();
     }
 
@@ -40,7 +40,7 @@ class HistoryLayerPainter extends CustomPainter {
     if (continuous) controller.trimPictureCache(indices.toSet());
   }
 
-  void _paintPage(Canvas canvas, int index, bool continuous) {
+  void _paintPage(Canvas canvas, int index, bool continuous, Rect viewInPage) {
     final page = controller.pages[index];
     final double pageWidth = page.width;
     final double pageHeight = page.height;
@@ -142,13 +142,14 @@ class HistoryLayerPainter extends CustomPainter {
     // 5. 繪製歷史手寫筆畫
     // 縮放 / 平移中：筆劃多的頁面改畫點陣快取 (成本與筆劃數量無關)；
     // 停手後 rasterFor 回傳 null，自動切回向量，靜止時依然銳利。
-    final raster = controller.rasterFor(index);
+    final raster = controller.rasterFor(index, viewInPage.intersect(pageRect));
     if (raster != null) {
+      final im = raster.image;
       canvas.drawImageRect(
-        raster,
-        Rect.fromLTWH(0, 0, raster.width.toDouble(), raster.height.toDouble()),
-        pageRect,
-        Paint()..filterQuality = FilterQuality.low,
+        im,
+        Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()),
+        raster.rect,
+        Paint()..filterQuality = FilterQuality.medium,
       );
     } else {
       final picture = controller.pictureFor(index);

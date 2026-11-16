@@ -251,7 +251,18 @@ class S {
   String get palmRejection => _t('防誤觸', 'Palm rejection');
   String get palmRejectionOn => _t('防誤觸：開 (僅限 Pencil)', 'Palm rejection on (pen only)');
   String get palmRejectionOff => _t('防誤觸：關', 'Palm rejection off');
+  String get screenshotQuality => _t('截圖解析度', 'Screenshot resolution');
+  String get screenshotQualityAuto => _t('自動 (依畫面縮放)', 'Auto (follows zoom)');
+  String screenshotQualityOption(double x) => _t(
+        '${x.toStringAsFixed(0)}× (每單位 ${x.toStringAsFixed(0)} 像素)',
+        '${x.toStringAsFixed(0)}× (${x.toStringAsFixed(0)} px per unit)',
+      );
+  String get screenshotQualityHint => _t(
+        '數字越大越清晰、檔案越大；超過記憶體上限時會自動降低。',
+        'Higher is sharper but larger; auto-reduced if it exceeds memory limits.',
+      );
   String get stateOn => _t('開', 'On');
+  String get stateAuto => _t('自動', 'Auto');
   String get stateOff => _t('關', 'Off');
 
   // 套索 / 截圖

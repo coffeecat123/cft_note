@@ -47,6 +47,12 @@ class CanvasPrefs {
   /// 防誤觸：開啟後只有筆可以畫 / 操作，單指改為平移
   final bool palmRejection;
 
+  /// 截圖解析度：每個頁面單位對應幾個像素。0 = 自動 (跟隨螢幕 DPR 與目前縮放)
+  final double screenshotScale;
+
+  /// 截圖解析度的可選值 (0 = 自動)
+  static const List<double> screenshotScaleOptions = [0, 1, 2, 3, 4, 6];
+
   const CanvasPrefs({
     this.brush = BrushSettings.fountainPen,
     this.strokeColor = Colors.black,
@@ -60,6 +66,7 @@ class CanvasPrefs {
     this.recentBackgrounds = const [],
     this.eraserRadius = 15.0,
     this.palmRejection = false,
+    this.screenshotScale = 0,
   });
 
   /// App 啟動時 (main) 讀進來；之後 CanvasController 建立時套用，
@@ -80,6 +87,7 @@ class CanvasPrefs {
     'recentBackgrounds': recentBackgrounds.map((b) => b.toJson()).toList(),
     'eraserRadius': eraserRadius,
     'palmRejection': palmRejection,
+    'screenshotScale': screenshotScale,
   };
 
   factory CanvasPrefs.fromJson(Map<String, dynamic> json) {
@@ -129,6 +137,9 @@ class CanvasPrefs {
           ? (json['eraserRadius'] as num).toDouble().clamp(5.0, 60.0).toDouble()
           : 15.0,
       palmRejection: json['palmRejection'] == true,
+      screenshotScale: json['screenshotScale'] is num
+          ? (json['screenshotScale'] as num).toDouble().clamp(0.0, 8.0).toDouble()
+          : 0,
     );
   }
 }

@@ -24,6 +24,7 @@ import 'lasso_context_menu.dart';
 import 'screenshot_sheet.dart';
 import 'page_list_dialog.dart';
 import '../../domain/models/page_layout_mode.dart';
+import '../../domain/models/canvas_prefs.dart';
 
 class CanvasPage extends StatefulWidget {
   final ShelfController shelfController;
@@ -912,6 +913,8 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
           _confirmDeleteCurrentPage();
         } else if (value == 'layout') {
           _showLayoutModeDialog();
+        } else if (value == 'shot_quality') {
+          _showScreenshotQualityDialog();
         } else if (value == 'palm') {
           _controller.togglePalmRejection();
         } else if (value == 'clear_page') {
@@ -963,6 +966,31 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                   color: _controller.palmRejection
                       ? Colors.blueAccent
                       : context.cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'shot_quality',
+          child: Row(
+            children: [
+              const Icon(Icons.crop_free, size: 18, color: Colors.blueAccent),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  s.screenshotQuality,
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+              Text(
+                _controller.screenshotScale == 0
+                    ? s.stateAuto
+                    : '${_controller.screenshotScale.toStringAsFixed(0)}×',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: context.cs.onSurfaceVariant,
                 ),
               ),
             ],
@@ -1024,6 +1052,50 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
         ),
       ],
     );
+  }
+
+  /// 選擇截圖解析度 (存入偏好設定，下次開啟仍保留)
+  Future<void> _showScreenshotQualityDialog() async {
+    final s = S.of(context);
+    final current = _controller.screenshotScale;
+    final selected = await showDialog<double>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(s.screenshotQuality, style: const TextStyle(fontSize: 16)),
+        children: [
+          for (final x in CanvasPrefs.screenshotScaleOptions)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, x),
+              child: Row(
+                children: [
+                  Icon(
+                    x == current
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 20,
+                    color: x == current ? Colors.blueAccent : Colors.grey,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    x == 0 ? s.screenshotQualityAuto : s.screenshotQualityOption(x),
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ],
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+            child: Text(
+              s.screenshotQualityHint,
+              style: TextStyle(fontSize: 11, color: context.cs.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (selected != null && mounted) {
+      _controller.setScreenshotScale(selected);
+    }
   }
 
   /// 列出所有頁面顯示方式供切換
