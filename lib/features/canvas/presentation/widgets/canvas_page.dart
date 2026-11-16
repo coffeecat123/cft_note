@@ -642,7 +642,7 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                     }
                   },
                   onPointerUp: (e) => _controller.onPointerUp(e.pointer),
-                  onPointerCancel: (e) => _controller.onPointerUp(e.pointer),
+                  onPointerCancel: (e) => _controller.onPointerUp(e.pointer, canceled: true),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [

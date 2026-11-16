@@ -3049,10 +3049,20 @@ class CanvasController extends ChangeNotifier {
   }
 
   // 3. 離地
-  void onPointerUp(int pointerId) {
+  void onPointerUp(int pointerId, {bool canceled = false}) {
     if (_ignoredPointers.remove(pointerId)) return;
     _touchIds.remove(pointerId);
     _penIds.remove(pointerId);
+
+    // ★ 系統取消 (防誤觸 / 手勢被搶走)：不是使用者真的抬手，
+    //   絕不能當成雙指 / 三指輕點
+    if (canceled) {
+      _twoFingerTapCandidate = false;
+      _threeFingerTapCandidate = false;
+      _twoFingerDownTime = null;
+      _threeFingerDownTime = null;
+    }
+
     final bool wasTouchPan = _isTouchPanning;
     final bool wasImagePan = _isImagePanning && _imagePanTotal >= _tapSlop;
     final bool wasLassoPan = _isLassoPanning && _lassoPanMoved;
