@@ -3373,6 +3373,9 @@ class CanvasController extends ChangeNotifier {
       lassoMenuCanPasteStrokes = hasClipboard;
       lassoMenuCanPasteImage = hasImage;
       _pasteScenePoint = point;
+      // 和套索一樣：選單出來後這根手指的動作到此為止，繼續按著 / 移動都不再平移或畫線
+      _gestureCancelled = true;
+      _isTouchPanning = false;
       _isImagePanning = false;
       activeRepaintNotifier.notifyListeners();
       notifyListeners();
@@ -3454,6 +3457,7 @@ class CanvasController extends ChangeNotifier {
 
   void copySelection() {
     if (_imageMenuTarget) {
+      // 圖片模式：複製到 App 內部剪貼簿 (系統剪貼簿只有截圖面板的「複製」才會寫入)
       _copyImageToClipboard(selectedImage!);
       lassoMenu = LassoMenuKind.none;
       _showHudMessage(S.current.copiedX(S.current.imagesCount(1)), icon: Icons.content_copy);
