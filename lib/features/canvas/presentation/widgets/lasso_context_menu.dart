@@ -42,6 +42,11 @@ class LassoContextMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = S.of(context);
     final items = switch (kind) {
+      LassoMenuKind.image => [
+        _item(Icons.content_cut, s.cut, onCut),
+        _item(Icons.content_copy, s.copy, onCopy),
+        _item(Icons.delete_outline, s.delete, onDelete, color: Colors.redAccent),
+      ],
       LassoMenuKind.selection => [
         _item(Icons.content_cut, s.cut, onCut),
         _item(Icons.content_copy, s.copy, onCopy),

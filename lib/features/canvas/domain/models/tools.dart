@@ -11,6 +11,9 @@ enum DrawingTool {
 enum LassoMenuKind {
   none,
 
+  /// 圖片模式：點一下圖片 → 剪下 / 複製 / 刪除
+  image,
+
   /// 在圈選範圍內點一下：剪下 / 複製 / 刪除 / 截圖
   selection,
 

@@ -1498,6 +1498,7 @@ class CanvasController extends ChangeNotifier {
   double _imageStartRot = 0.0;
   Offset _imageDownScene = Offset.zero;
   Offset _imageLastScene = Offset.zero;
+  Offset _imageDownScreen = Offset.zero; // 按下的螢幕座標 (選單出現位置)
   bool _imageDragStarted = false;
   // 按在「尚未選取」的圖片上：等手指放開 / 拖動才真正選取 (雙指縮放時不會換掉選取)
   PageImage? _imageCandidate;
@@ -1672,7 +1673,7 @@ class CanvasController extends ChangeNotifier {
     if (candidate != null) {
       _imageOp = _ImageOp.none;
       _imageStartRect = null;
-      _selectedImage = candidate; // 點一下 = 選取
+      _selectedImage = candidate; // 點一下 = 只選取；再點一次才浮出選單
       viewSignal.fire();
       return;
     }
@@ -1685,10 +1686,19 @@ class CanvasController extends ChangeNotifier {
     final img = _selectedImage;
     final start = _imageStartRect;
     final op = _imageOp;
+    final bool wasTap = !_imageDragStarted;
     _imageOp = _ImageOp.none;
     _imageStartRect = null;
     _imageDragStarted = false;
     if (img == null || start == null || op == _ImageOp.none) return;
+
+    // 在已選取的圖片框內點一下 (沒有拖動) → 浮出 剪下 / 複製 / 刪除
+    if (op == _ImageOp.move && wasTap) {
+      lassoMenu = LassoMenuKind.image;
+      lassoMenuAnchor = _imageDownScreen;
+      notifyListeners();
+      return;
+    }
 
     if (op == _ImageOp.delete) {
       // 手指放開時還在刪除握把上才算「按下刪除」
@@ -1732,7 +1742,7 @@ class CanvasController extends ChangeNotifier {
     _xfSuspend(); // 套索調整大小做到一半也一併確定
   }
 
-  void _deleteImage(PageImage img) {
+  void _deleteImage(PageImage img, {bool hud = true}) {
     final list = currentPage.images;
     final i = list.indexOf(img);
     if (i == -1) return;
@@ -1741,8 +1751,16 @@ class CanvasController extends ChangeNotifier {
     _redoStack.clear();
     _selectedImage = null;
     _markDirty();
-    _showHudMessage(S.current.imageDeleted, icon: Icons.delete_outline);
+    if (hud) _showHudMessage(S.current.imageDeleted, icon: Icons.delete_outline);
   }
+
+  /// 圖片模式選單：複製 / 剪下 / 刪除目前選取的圖片 (剪貼簿與套索共用，可到套索模式貼上)
+  void _copyImageToClipboard(PageImage img) {
+    _clipboard = [];
+    _clipboardImages = [img.copy()];
+  }
+
+  bool get _imageMenuTarget => currentTool == DrawingTool.image && selectedImage != null;
 
   // ==========================================
   // ★ 套索「調整大小」 (貼上之後也自動進入)
@@ -2765,6 +2783,8 @@ class CanvasController extends ChangeNotifier {
           }
         }
       } else if (currentTool == DrawingTool.image) {
+        lassoMenu = LassoMenuKind.none; // 任何新的觸碰都先收起選單
+        _imageDownScreen = position;
         _imageDown(scenePoint);
         // 手指按在空白處 (沒碰到圖片 / 握把) → 單指平移畫布
         _isImagePanning = kind == PointerDeviceKind.touch &&
@@ -3333,6 +3353,13 @@ class CanvasController extends ChangeNotifier {
   }
 
   void copySelection() {
+    if (_imageMenuTarget) {
+      _copyImageToClipboard(selectedImage!);
+      lassoMenu = LassoMenuKind.none;
+      _showHudMessage(S.current.copiedX(S.current.imagesCount(1)), icon: Icons.content_copy);
+      notifyListeners();
+      return;
+    }
     if (!_hasSelectedContent) return;
     _copySelectionToClipboard();
     lassoMenu = LassoMenuKind.none;
@@ -3340,6 +3367,15 @@ class CanvasController extends ChangeNotifier {
   }
 
   void cutSelection() {
+    if (_imageMenuTarget) {
+      final img = selectedImage!;
+      _copyImageToClipboard(img);
+      lassoMenu = LassoMenuKind.none;
+      _deleteImage(img, hud: false);
+      _showHudMessage(S.current.cutX(S.current.imagesCount(1)), icon: Icons.content_cut);
+      notifyListeners();
+      return;
+    }
     if (!_hasSelectedContent) return;
     _copySelectionToClipboard();
     final label = _countLabel();
@@ -3348,6 +3384,12 @@ class CanvasController extends ChangeNotifier {
   }
 
   void deleteSelection() {
+    if (_imageMenuTarget) {
+      lassoMenu = LassoMenuKind.none;
+      _deleteImage(selectedImage!);
+      notifyListeners();
+      return;
+    }
     if (!_hasSelectedContent) return;
     final label = _countLabel();
     _removeSelected();
