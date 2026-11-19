@@ -1363,11 +1363,13 @@ class CanvasController extends ChangeNotifier {
   }
 
   void setTool(DrawingTool tool) {
-    if (tool != currentTool) _cancelActiveGesture();
+    final bool changed = tool != currentTool;
+    if (changed) _cancelActiveGesture();
     currentTool = tool;
     eraserPosition = null; // ★ 切換工具時清空圓圈
     activeRepaintNotifier.notifyListeners();
-    if (tool != DrawingTool.lasso) {
+    // 換工具一定清掉選取與浮出的選單 (圖片模式 → 套索時，圖片選單 / 選取也不能留著)
+    if (changed || tool != DrawingTool.lasso) {
       clearSelection();
     }
     notifyListeners();
