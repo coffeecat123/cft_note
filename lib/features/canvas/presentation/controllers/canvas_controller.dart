@@ -3535,8 +3535,10 @@ class CanvasController extends ChangeNotifier {
   /// 把剪貼簿內容 (筆劃 + 圖片) 貼到剛才點的位置 (以內容中心對齊，並保持在紙張內)，貼完自動選取方便拖動
   void pasteFromClipboard() {
     if (!hasClipboard) return;
-    // 貼上後要能縮放 / 旋轉 / 移動，那是套索的操作 → 其他工具先切到套索
-    if (currentTool != DrawingTool.lasso) setTool(DrawingTool.lasso);
+    // 剪貼簿只有一張圖 (從圖片模式複製的) → 貼完回到圖片模式；其餘貼完進套索的調整大小
+    final bool singleImage = _clipboard.isEmpty && _clipboardImages.length == 1;
+    final target = singleImage ? DrawingTool.image : DrawingTool.lasso;
+    if (currentTool != target) setTool(target);
     Rect? b;
     for (final s in _clipboard) {
       b = b == null ? s.bounds : b.expandToInclude(s.bounds);
@@ -3592,6 +3594,15 @@ class CanvasController extends ChangeNotifier {
     _markDirty();
 
     clearSelection();
+    if (singleImage) {
+      _selectedImage = pastedImages.first; // 圖片模式：選取剛貼上的圖片，可直接平移 / 縮放 / 旋轉
+      _bakeHistoryToPicture();
+      activeRepaintNotifier.notifyListeners();
+      viewSignal.fire();
+      notifyListeners();
+      _showHudMessage(S.current.pasted, icon: Icons.content_paste);
+      return;
+    }
     _selectedStrokes.addAll(pasted);
     _selectedImages.addAll(pastedImages);
     final box = b.shift(shift).inflate(8);
