@@ -556,6 +556,7 @@ class CanvasController extends ChangeNotifier {
   static const double _tapSlop = 10.0; // 螢幕像素；移動超過才算拖曳
   static const Duration _longPressDelay = Duration(milliseconds: 500);
   Timer? _lassoLongPressTimer; // 空白處長按 → 顯示「貼上」
+  Timer? _pasteHoldTimer; // 套索以外的工具：空白處長按 → 顯示「貼上」
   Offset _lassoDownScreen = Offset.zero;
   bool _selectionDragStarted = false;
   // 防誤觸下手指在套索圈外：單指平移畫布 (沒移動就放開 = 點一下取消選取；按住 = 長按貼上)
@@ -954,6 +955,7 @@ class CanvasController extends ChangeNotifier {
     _scrollSettleTimer?.cancel();
     _disposeRasters();
     _lassoLongPressTimer?.cancel();
+    _pasteHoldTimer?.cancel();
     _clearPictureCache();
     activeRepaintNotifier.dispose();
     viewSignal.dispose();
@@ -1322,6 +1324,7 @@ class CanvasController extends ChangeNotifier {
 
     // 套索：取消圈選 / 長按；拖曳到一半就移回原位
     _lassoLongPressTimer?.cancel();
+    _pasteHoldTimer?.cancel();
     _currentLassoDrawing.clear();
     _isPotentialNewLasso = false;
     _isLassoPanning = false;
@@ -2691,6 +2694,7 @@ class CanvasController extends ChangeNotifier {
             _isTouchPanning = true;
             _touchPanLast = position;
             lassoMenu = LassoMenuKind.none;
+            _startPasteHold(position); // 手指按著不動 → 貼上選單
             return;
           }
           // 套索：手指不能畫圈，但圈內可拖曳 / 點一下開選單，
@@ -2714,6 +2718,7 @@ class CanvasController extends ChangeNotifier {
       _currentLassoDrawing.clear();
       _isPotentialNewLasso = false;
       _lassoLongPressTimer?.cancel();
+      _pasteHoldTimer?.cancel();
       _isLassoPanning = false;
       _lassoPanMoved = false;
       if (_isDraggingSelection) {
@@ -2797,11 +2802,14 @@ class CanvasController extends ChangeNotifier {
         _activatePageAt(position);
       }
       final scenePoint = toScene(position);
+      _pasteHoldTimer?.cancel();
+      lassoMenu = LassoMenuKind.none; // 任何新的觸碰都先收起選單
 
       if (_isInkTool) {
         _smoothedPressure = pressure;
         _currentPoints.add(PointVector(scenePoint.dx, scenePoint.dy, pressure));
         _shapeHoldStart(position);
+        _startPasteHold(position);
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.eraser) {
@@ -2809,6 +2817,7 @@ class CanvasController extends ChangeNotifier {
         eraserPosition = scenePoint;
         _lastEraseScenePoint = scenePoint;
         _eraseAlongSegment(scenePoint, scenePoint);
+        if (_currentErasedBatch.isEmpty) _startPasteHold(position); // 沒擦到東西才算空白處
         activeRepaintNotifier.notifyListeners();
         return;
       } else if (currentTool == DrawingTool.lasso) {
@@ -2845,6 +2854,10 @@ class CanvasController extends ChangeNotifier {
         if (_isImagePanning) {
           _touchPanLast = position;
           _imagePanTotal = 0.0;
+        }
+        // 按在空白處 (沒碰到圖片 / 握把) → 長按浮出貼上選單
+        if (_imageOp == _ImageOp.none && _imageCandidate == null) {
+          _startPasteHold(position);
         }
       }
     }
@@ -3331,6 +3344,41 @@ class CanvasController extends ChangeNotifier {
   }
 
   /// 套索工具在空白處按住：剪貼簿有內容時，時間到就浮出「貼上」
+  /// 套索以外的工具 (筆 / 螢光筆 / 橡皮擦 / 圖片)：在空白處按住不動 → 浮出「貼上」。
+  /// 剪貼簿有筆劃 / 圖片才會出現；手指移動、離開、第二根手指落下都會取消。
+  void _startPasteHold(Offset screen) {
+    _pasteHoldTimer?.cancel();
+    bool stillHolding() =>
+        !_disposed &&
+        currentTool != DrawingTool.lasso &&
+        !_isScalingLocked &&
+        _pointerPositions.length == 1 &&
+        (_pointerPositions.values.first - screen).distance < _tapSlop &&
+        (currentTool != DrawingTool.eraser || _currentErasedBatch.isEmpty);
+
+    _pasteHoldTimer = Timer(_longPressDelay, () async {
+      if (!stillHolding()) return;
+      if (isContinuous) _activatePageAt(screen); // 連續模式：貼到手指按著的那一頁
+      final point = toScene(screen);
+      if (!isInsidePage(point)) return;
+      final hasImage = await ClipboardImageService.hasImage();
+      if (!stillHolding()) return; // 讀剪貼簿期間手指已離開 / 移動
+      if (!hasClipboard && !hasImage) return;
+      // 按著的這一點不是要畫的：放棄那個小點 / 形狀辨識
+      _currentPoints.clear();
+      _resetShapeState();
+      clearSelection();
+      lassoMenu = LassoMenuKind.paste;
+      lassoMenuAnchor = screen;
+      lassoMenuCanPasteStrokes = hasClipboard;
+      lassoMenuCanPasteImage = hasImage;
+      _pasteScenePoint = point;
+      _isImagePanning = false;
+      activeRepaintNotifier.notifyListeners();
+      notifyListeners();
+    });
+  }
+
   void _startLassoLongPress() {
     _lassoLongPressTimer?.cancel();
     bool stillHolding() =>
@@ -3483,6 +3531,8 @@ class CanvasController extends ChangeNotifier {
   /// 把剪貼簿內容 (筆劃 + 圖片) 貼到剛才點的位置 (以內容中心對齊，並保持在紙張內)，貼完自動選取方便拖動
   void pasteFromClipboard() {
     if (!hasClipboard) return;
+    // 貼上後要能縮放 / 旋轉 / 移動，那是套索的操作 → 其他工具先切到套索
+    if (currentTool != DrawingTool.lasso) setTool(DrawingTool.lasso);
     Rect? b;
     for (final s in _clipboard) {
       b = b == null ? s.bounds : b.expandToInclude(s.bounds);
