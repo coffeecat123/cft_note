@@ -16,7 +16,7 @@ class LassoContextMenu extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onScreenshot;
   final VoidCallback onResize;
-  final bool inTransformMode; // 已經在調整大小模式 → 不再顯示「調整大小」
+  final bool inTransformMode; // 已經在調整大小模式 → 不顯示「調整大小」與「截圖」
   final VoidCallback onPaste;
   final VoidCallback onPasteImage;
   final bool canPasteStrokes; // 套索剪貼簿有筆劃
@@ -47,7 +47,8 @@ class LassoContextMenu extends StatelessWidget {
         _item(Icons.content_copy, s.copy, onCopy),
         _item(Icons.delete_outline, s.delete, onDelete, color: Colors.redAccent),
         if (!inTransformMode) _item(Icons.open_in_full, s.resize, onResize),
-        _item(Icons.crop_free, s.screenshot, onScreenshot),
+        // 調整大小時框內容還在變動，不提供截圖 (避免截到框外的其他東西)
+        if (!inTransformMode) _item(Icons.crop_free, s.screenshot, onScreenshot),
       ],
       LassoMenuKind.region => [_item(Icons.crop_free, s.screenshot, onScreenshot)],
       LassoMenuKind.paste => [
