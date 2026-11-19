@@ -647,6 +647,11 @@ class CanvasController extends ChangeNotifier {
     newPageStyle = prefs.newPageStyle;
     recentBackgrounds.addAll(prefs.recentBackgrounds.take(8));
     eraserScreenRadius = prefs.eraserRadius;
+    eraseTargetPen = prefs.eraseTargetPen;
+    eraseTargetHighlighter = prefs.eraseTargetHighlighter;
+    lassoTargetPen = prefs.lassoTargetPen;
+    lassoTargetHighlighter = prefs.lassoTargetHighlighter;
+    lassoTargetImage = prefs.lassoTargetImage;
     palmRejection = prefs.palmRejection;
     gesturesEnabled = prefs.gesturesEnabled;
     screenshotScale = prefs.screenshotScale;
@@ -793,6 +798,46 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
   Offset? eraserPosition; // 當前橡皮擦位置 (用於即時圓圈預覽)
+
+  // 橡皮擦 / 套索可作用的對象 (至少保留一項；設定會記住)
+  bool eraseTargetPen = true;
+  bool eraseTargetHighlighter = true;
+  bool lassoTargetPen = true;
+  bool lassoTargetHighlighter = true;
+  bool lassoTargetImage = true;
+
+  void setEraseTargets({bool? pen, bool? highlighter}) {
+    final p = pen ?? eraseTargetPen;
+    final h = highlighter ?? eraseTargetHighlighter;
+    if (!p && !h) return; // 至少留一項
+    if (p == eraseTargetPen && h == eraseTargetHighlighter) return;
+    eraseTargetPen = p;
+    eraseTargetHighlighter = h;
+    _schedulePrefsSave();
+    notifyListeners();
+  }
+
+  void setLassoTargets({bool? pen, bool? highlighter, bool? image}) {
+    final p = pen ?? lassoTargetPen;
+    final h = highlighter ?? lassoTargetHighlighter;
+    final i = image ?? lassoTargetImage;
+    if (!p && !h && !i) return; // 至少留一項
+    if (p == lassoTargetPen && h == lassoTargetHighlighter && i == lassoTargetImage) {
+      return;
+    }
+    lassoTargetPen = p;
+    lassoTargetHighlighter = h;
+    lassoTargetImage = i;
+    clearSelection(); // 對象改了，目前的選取就不適用了
+    _schedulePrefsSave();
+    notifyListeners();
+  }
+
+  bool _erasable(Stroke s) =>
+      s.settings.isHighlighter ? eraseTargetHighlighter : eraseTargetPen;
+
+  bool _lassoSelectable(Stroke s) =>
+      s.settings.isHighlighter ? lassoTargetHighlighter : lassoTargetPen;
 
   // 轉換成畫布世界座標下的感應半徑 (隨縮放動態調整，維持螢幕大小恆定)
   double get currentEraseRadius => eraserScreenRadius / (zoomPercentage / 100);
@@ -983,6 +1028,11 @@ class CanvasController extends ChangeNotifier {
       newPageStyle: newPageStyle,
       recentBackgrounds: List.of(recentBackgrounds),
       eraserRadius: eraserScreenRadius,
+      eraseTargetPen: eraseTargetPen,
+      eraseTargetHighlighter: eraseTargetHighlighter,
+      lassoTargetPen: lassoTargetPen,
+      lassoTargetHighlighter: lassoTargetHighlighter,
+      lassoTargetImage: lassoTargetImage,
       palmRejection: palmRejection,
       gesturesEnabled: gesturesEnabled,
       screenshotScale: screenshotScale,
@@ -3531,6 +3581,7 @@ class CanvasController extends ChangeNotifier {
     final polyBounds = _boundsOf(_selectedLassoPolygon);
 
     for (final stroke in _historyStrokes) {
+      if (!_lassoSelectable(stroke)) continue;
       if (!stroke.bounds.inflate(1.0).overlaps(polyBounds)) continue;
       bool isHit = false;
       final sp = stroke.points;
@@ -3567,7 +3618,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     // 圖片：套索與圖片矩形有任何重疊 (哪怕只套到一角) 就算圈到
-    if (_selectedLassoPolygon.length >= 3) {
+    if (lassoTargetImage && _selectedLassoPolygon.length >= 3) {
       final lassoPath = Path()..addPolygon(_selectedLassoPolygon, true);
       for (final img in currentPage.images) {
         if (!img.bounds.overlaps(polyBounds)) continue; // 外框不相交就不必精算
@@ -3603,6 +3654,7 @@ class CanvasController extends ChangeNotifier {
 
     for (int i = _historyStrokes.length - 1; i >= 0; i--) {
       final stroke = _historyStrokes[i];
+      if (!_erasable(stroke)) continue;
       if (stroke.hitsCapsule(from, to, radius)) {
         _currentErasedBatch.add(MapEntry(i, stroke));
         _historyStrokes.removeAt(i);

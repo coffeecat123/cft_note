@@ -44,6 +44,15 @@ class CanvasPrefs {
   /// 橡皮擦半徑 (螢幕像素)
   final double eraserRadius;
 
+  /// 橡皮擦可以擦的對象 (一般筆 / 螢光筆)
+  final bool eraseTargetPen;
+  final bool eraseTargetHighlighter;
+
+  /// 套索可以圈選的對象 (一般筆 / 螢光筆 / 圖片)
+  final bool lassoTargetPen;
+  final bool lassoTargetHighlighter;
+  final bool lassoTargetImage;
+
   /// 防誤觸：開啟後只有筆可以畫 / 操作，單指改為平移
   final bool palmRejection;
 
@@ -68,6 +77,11 @@ class CanvasPrefs {
     this.newPageStyle = NewPageStyle.lastUsed,
     this.recentBackgrounds = const [],
     this.eraserRadius = 15.0,
+    this.eraseTargetPen = true,
+    this.eraseTargetHighlighter = true,
+    this.lassoTargetPen = true,
+    this.lassoTargetHighlighter = true,
+    this.lassoTargetImage = true,
     this.palmRejection = false,
     this.gesturesEnabled = true,
     this.screenshotScale = 0,
@@ -90,6 +104,11 @@ class CanvasPrefs {
     'newPageStyle': newPageStyle.name,
     'recentBackgrounds': recentBackgrounds.map((b) => b.toJson()).toList(),
     'eraserRadius': eraserRadius,
+    'eraseTargetPen': eraseTargetPen,
+    'eraseTargetHighlighter': eraseTargetHighlighter,
+    'lassoTargetPen': lassoTargetPen,
+    'lassoTargetHighlighter': lassoTargetHighlighter,
+    'lassoTargetImage': lassoTargetImage,
     'palmRejection': palmRejection,
     'gesturesEnabled': gesturesEnabled,
     'screenshotScale': screenshotScale,
@@ -141,6 +160,19 @@ class CanvasPrefs {
       eraserRadius: json['eraserRadius'] is num
           ? (json['eraserRadius'] as num).toDouble().clamp(5.0, 60.0).toDouble()
           : 15.0,
+      // 舊存檔沒有這些欄位 → 預設全開；全關的存檔視為全開 (避免工具失效)
+      eraseTargetPen: json['eraseTargetPen'] != false ||
+          json['eraseTargetHighlighter'] == false,
+      eraseTargetHighlighter: json['eraseTargetHighlighter'] != false ||
+          json['eraseTargetPen'] == false,
+      lassoTargetPen: json['lassoTargetPen'] != false ||
+          (json['lassoTargetHighlighter'] == false &&
+              json['lassoTargetImage'] == false),
+      lassoTargetHighlighter: json['lassoTargetHighlighter'] != false ||
+          (json['lassoTargetPen'] == false && json['lassoTargetImage'] == false),
+      lassoTargetImage: json['lassoTargetImage'] != false ||
+          (json['lassoTargetPen'] == false &&
+              json['lassoTargetHighlighter'] == false),
       palmRejection: json['palmRejection'] == true,
       gesturesEnabled: json['gesturesEnabled'] != false,
       screenshotScale: json['screenshotScale'] is num

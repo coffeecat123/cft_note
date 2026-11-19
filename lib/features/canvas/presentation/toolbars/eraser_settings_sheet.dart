@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/i18n/app_strings.dart';
 import '../controllers/canvas_controller.dart';
+import 'target_chips.dart';
 
 class EraserSettingsSheet extends StatefulWidget {
   final CanvasController controller;
@@ -112,6 +113,30 @@ class _EraserSettingsSheetState extends State<EraserSettingsSheet> {
                         widget.controller.setEraserRadius(v);
                       },
                     ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TargetChips(
+                title: s.eraseTargets,
+                options: [
+                  TargetOption(
+                    label: s.targetPen,
+                    icon: Icons.edit,
+                    selected: widget.controller.eraseTargetPen,
+                    onChanged: (v) {
+                      widget.controller.setEraseTargets(pen: v);
+                      setState(() {});
+                    },
+                  ),
+                  TargetOption(
+                    label: s.highlighter,
+                    icon: Icons.highlight,
+                    selected: widget.controller.eraseTargetHighlighter,
+                    onChanged: (v) {
+                      widget.controller.setEraseTargets(highlighter: v);
+                      setState(() {});
+                    },
                   ),
                 ],
               ),

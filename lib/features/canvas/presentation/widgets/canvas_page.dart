@@ -18,6 +18,7 @@ import '../controllers/canvas_controller.dart';
 import '../toolbars/brush_settings_sheet.dart';
 import '../toolbars/color_settings_sheet.dart';
 import '../toolbars/eraser_settings_sheet.dart';
+import '../toolbars/lasso_settings_sheet.dart';
 import '../toolbars/page_background_sheet.dart';
 import 'canvas_painters.dart';
 import 'lasso_context_menu.dart';
@@ -505,9 +506,23 @@ class _CanvasPageState extends State<CanvasPage> with WidgetsBindingObserver {
                                         : colors.toolbarIcon,
                                     size: 20,
                                   ),
-                                  tooltip: s.lasso,
-                                  onPressed: () =>
-                                      _controller.setTool(DrawingTool.lasso),
+                                  // 未選中 → 切換到套索；已選中 → 圈選對象設定 (與橡皮擦相同)
+                                  tooltip:
+                                      _controller.currentTool ==
+                                          DrawingTool.lasso
+                                      ? s.lassoSettings
+                                      : s.lasso,
+                                  onPressed: () {
+                                    if (_controller.currentTool !=
+                                        DrawingTool.lasso) {
+                                      _controller.setTool(DrawingTool.lasso);
+                                    } else {
+                                      LassoSettingsSheet.show(
+                                        context,
+                                        _controller,
+                                      );
+                                    }
+                                  },
                                 ),
 
                                 // 圖片模式：未選中 → 切換到圖片模式；已選中 → 選擇圖片來源

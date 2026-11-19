@@ -196,6 +196,12 @@ class S {
   String get eraserSettings => _t('橡皮擦大小', 'Eraser size');
   String get eraserSize => _t('半徑', 'Radius');
   String get lasso => _t('套索工具', 'Lasso');
+  String get lassoSettings => _t('套索設定', 'Lasso settings');
+  String get eraseTargets => _t('擦除對象', 'Erase');
+  String get lassoTargets => _t('圈選對象', 'Select');
+  String get targetPen => _t('一般筆', 'Pen');
+  String get targetImage => _t('圖片', 'Images');
+  String get keepOneTarget => _t('至少要保留一項', 'Keep at least one');
   String get insertImage => _t('插入圖片', 'Insert image');
   String get imageMode => _t('圖片模式', 'Image mode');
   String get undo => _t('復原', 'Undo');
